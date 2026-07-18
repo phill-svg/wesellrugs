@@ -7,7 +7,10 @@ const state = {
   ws: null,
   renderedIds: new Set(),
   friends: [],
+  settingsColor: "",
 };
+
+const AVATAR_COLORS = ["#2f80ed", "#0ea5a4", "#10b981", "#f59e0b", "#f97316", "#ef4444", "#6366f1", "#64748b"];
 
 // ---------- API ----------
 async function api(path, opts = {}) {
@@ -30,6 +33,22 @@ function escapeHtml(s) {
 function scrollBottom() {
   const el = $("#messages");
   el.scrollTop = el.scrollHeight;
+}
+function hashStr(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+function colorFor(u) {
+  return (u && u.avatarColor) || AVATAR_COLORS[hashStr((u && (u.username || u.displayName)) || "?") % AVATAR_COLORS.length];
+}
+function avatarHtml(u, cls = "") {
+  return `<span class="avatar ${cls}" style="background:${colorFor(u)}">${initials(u.displayName)}</span>`;
+}
+function paintAvatar(el, u) {
+  el.textContent = initials(u.displayName);
+  el.style.background = colorFor(u);
+  el.classList.remove("group");
 }
 
 // ---------- Auth UI ----------
@@ -77,9 +96,12 @@ function enterApp(user) {
   state.me = user;
   $("#auth-screen").classList.add("hidden");
   $("#app").classList.remove("hidden");
-  $("#me-name").textContent = user.displayName;
-  $("#me-avatar").textContent = initials(user.displayName);
+  renderMe();
   refreshAll();
+}
+function renderMe() {
+  $("#me-name").textContent = state.me.displayName;
+  paintAvatar($("#me-avatar"), state.me);
 }
 
 async function refreshAll() {
@@ -103,31 +125,26 @@ async function runSearch(q) {
   try { ({ users } = await api("/api/users/search?q=" + encodeURIComponent(q))); } catch { return; }
   const list = $("#search-results");
   list.innerHTML = "";
-  if (!users.length) {
-    list.innerHTML = '<li class="empty-hint">No one found.</li>';
-  } else {
-    for (const u of users) list.appendChild(searchRow(u));
-  }
+  if (!users.length) list.innerHTML = '<li class="empty-hint">No one found.</li>';
+  else for (const u of users) list.appendChild(searchRow(u));
   list.classList.remove("hidden");
 }
 
 function searchRow(u) {
   const li = document.createElement("li");
   li.className = "row-item";
-  const avatar = `<span class="avatar sm">${initials(u.displayName)}</span>`;
-  const info = `<div class="row-main"><div class="row-name">${escapeHtml(u.displayName)}</div><div class="row-sub">@${escapeHtml(u.username)}</div></div>`;
+  li.innerHTML = avatarHtml(u, "sm") + `<div class="row-main"><div class="row-name">${escapeHtml(u.displayName)}</div><div class="row-sub">@${escapeHtml(u.username)}</div></div>`;
+  li.onclick = () => openProfile(u.id);
   const btn = document.createElement("button");
-  btn.className = "pill-btn";
   btn.type = "button";
   const setState = (s) => {
     btn.disabled = false;
     if (s === "friends") { btn.textContent = "Message"; btn.className = "pill-btn primary"; btn.onclick = (ev) => { ev.stopPropagation(); startDm(u); }; }
-    else if (s === "requested") { btn.textContent = "Requested"; btn.className = "pill-btn"; btn.disabled = true; btn.onclick = null; }
+    else if (s === "requested") { btn.textContent = "Requested"; btn.className = "pill-btn"; btn.disabled = true; }
     else if (s === "incoming") { btn.textContent = "Accept"; btn.className = "pill-btn primary"; btn.onclick = async (ev) => { ev.stopPropagation(); await api("/api/friends/accept", { method: "POST", body: JSON.stringify({ fromUserId: u.id }) }); setState("friends"); refreshAll(); }; }
     else { btn.textContent = "Add friend"; btn.className = "pill-btn"; btn.onclick = async (ev) => { ev.stopPropagation(); const { state: st } = await api("/api/friends/request", { method: "POST", body: JSON.stringify({ toUserId: u.id }) }); setState(st); refreshAll(); }; }
   };
   setState(u.friendState);
-  li.innerHTML = avatar + info;
   li.appendChild(btn);
   return li;
 }
@@ -144,15 +161,12 @@ async function loadRequests() {
   for (const u of requests) {
     const li = document.createElement("li");
     li.className = "row-item";
-    li.innerHTML = `<span class="avatar sm">${initials(u.displayName)}</span>
-      <div class="row-main"><div class="row-name">${escapeHtml(u.displayName)}</div><div class="row-sub">wants to be friends</div></div>`;
+    li.innerHTML = avatarHtml(u, "sm") + `<div class="row-main"><div class="row-name">${escapeHtml(u.displayName)}</div><div class="row-sub">wants to be friends</div></div>`;
     const accept = document.createElement("button");
-    accept.className = "pill-btn primary"; accept.type = "button"; accept.textContent = "✓";
-    accept.title = "Accept";
+    accept.className = "pill-btn primary"; accept.type = "button"; accept.textContent = "✓"; accept.title = "Accept";
     accept.onclick = async () => { await api("/api/friends/accept", { method: "POST", body: JSON.stringify({ fromUserId: u.id }) }); refreshAll(); };
     const decline = document.createElement("button");
-    decline.className = "pill-btn"; decline.type = "button"; decline.textContent = "✕";
-    decline.title = "Decline";
+    decline.className = "pill-btn"; decline.type = "button"; decline.textContent = "✕"; decline.title = "Decline";
     decline.onclick = async () => { await api("/api/friends/decline", { method: "POST", body: JSON.stringify({ fromUserId: u.id }) }); refreshAll(); };
     li.appendChild(accept); li.appendChild(decline);
     list.appendChild(li);
@@ -170,8 +184,7 @@ async function loadFriends() {
   for (const u of friends) {
     const li = document.createElement("li");
     li.className = "row-item";
-    li.innerHTML = `<span class="avatar sm">${initials(u.displayName)}</span>
-      <div class="row-main"><div class="row-name">${escapeHtml(u.displayName)}</div><div class="row-sub">@${escapeHtml(u.username)}</div></div>`;
+    li.innerHTML = avatarHtml(u, "sm") + `<div class="row-main"><div class="row-name">${escapeHtml(u.displayName)}</div><div class="row-sub">@${escapeHtml(u.username)}</div></div>`;
     li.onclick = () => startDm(u);
     list.appendChild(li);
   }
@@ -188,7 +201,7 @@ async function loadConversations() {
     const li = document.createElement("li");
     li.className = "row-item";
     if (state.activeConv && state.activeConv.id === c.id) li.classList.add("active");
-    const icon = c.type === "group" ? '<span class="avatar sm group">👥</span>' : `<span class="avatar sm">${initials(c.title)}</span>`;
+    const icon = c.type === "group" ? '<span class="avatar sm group">👥</span>' : avatarHtml(c.other || { displayName: c.title }, "sm");
     const preview = c.lastMessage ? escapeHtml(c.lastMessage.body.slice(0, 38)) : (c.type === "group" ? "New group" : "Say hello 👋");
     li.innerHTML = `${icon}<div class="row-main"><div class="row-name">${escapeHtml(c.title)}</div><div class="row-sub">${preview}</div></div>`;
     li.onclick = () => openConversation(c);
@@ -198,6 +211,7 @@ async function loadConversations() {
 
 async function startDm(friend) {
   const { conversationId } = await api("/api/dm", { method: "POST", body: JSON.stringify({ withUserId: friend.id }) });
+  $("#profile-modal").classList.add("hidden");
   openConversation({ id: conversationId, type: "dm", title: friend.displayName, other: friend, members: [friend] });
   $("#search-results").classList.add("hidden");
   $("#search-input").value = "";
@@ -212,14 +226,15 @@ async function openConversation(conv) {
   $("#chat-active").classList.remove("hidden");
   $("#app").classList.add("viewing-chat");
   $("#peer-name").textContent = conv.title;
+  const peerAvatar = $("#peer-avatar");
   if (conv.type === "group") {
-    $("#peer-avatar").textContent = "👥";
-    $("#peer-avatar").classList.add("group");
+    peerAvatar.textContent = "👥";
+    peerAvatar.style.background = "";
+    peerAvatar.classList.add("group");
     const names = (conv.members || []).map((m) => m.displayName);
     $("#peer-status").textContent = `${(conv.members || []).length + 1} members · You, ${names.join(", ")}`;
   } else {
-    $("#peer-avatar").textContent = initials(conv.title);
-    $("#peer-avatar").classList.remove("group");
+    paintAvatar(peerAvatar, conv.other || { displayName: conv.title });
     $("#peer-status").textContent = conv.other ? "@" + conv.other.username : "";
   }
   $("#messages").innerHTML = "";
@@ -269,6 +284,97 @@ $("#composer").addEventListener("submit", (e) => {
   input.focus();
 });
 
+// ---------- View a profile ----------
+$("#chat-header").addEventListener("click", () => {
+  if (state.activeConv && state.activeConv.type === "dm" && state.activeConv.other) openProfile(state.activeConv.other.id);
+});
+$("#profile-close").addEventListener("click", () => $("#profile-modal").classList.add("hidden"));
+$("#profile-modal").addEventListener("click", (e) => { if (e.target.id === "profile-modal") $("#profile-modal").classList.add("hidden"); });
+
+async function openProfile(userId) {
+  let data;
+  try { data = await api("/api/profile?id=" + encodeURIComponent(userId)); } catch { return; }
+  const u = data.user;
+  paintAvatar($("#profile-avatar"), u);
+  $("#profile-name").textContent = u.displayName;
+  $("#profile-username").textContent = "@" + u.username;
+  const bio = $("#profile-bio");
+  bio.textContent = u.bio || "No bio yet.";
+  bio.classList.toggle("muted", !u.bio);
+  const msgBtn = $("#profile-message");
+  if (data.friendState === "friends") {
+    msgBtn.classList.remove("hidden");
+    msgBtn.onclick = () => startDm(u);
+  } else {
+    msgBtn.classList.add("hidden");
+  }
+  $("#search-results").classList.add("hidden");
+  $("#profile-modal").classList.remove("hidden");
+}
+
+// ---------- Edit my profile (settings) ----------
+$("#me-profile-btn").addEventListener("click", openSettings);
+$("#settings-cancel").addEventListener("click", () => $("#settings-modal").classList.add("hidden"));
+$("#settings-modal").addEventListener("click", (e) => { if (e.target.id === "settings-modal") $("#settings-modal").classList.add("hidden"); });
+
+function openSettings() {
+  $("#settings-name").value = state.me.displayName;
+  $("#settings-bio").value = state.me.bio || "";
+  $("#settings-error").textContent = "";
+  $("#pw-msg").textContent = "";
+  $("#pw-current").value = "";
+  $("#pw-new").value = "";
+  state.settingsColor = colorFor(state.me);
+  renderSwatches();
+  updateSettingsAvatar();
+  $("#settings-modal").classList.remove("hidden");
+}
+function renderSwatches() {
+  const wrap = $("#settings-colors");
+  wrap.innerHTML = "";
+  for (const c of AVATAR_COLORS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "swatch" + (c === state.settingsColor ? " selected" : "");
+    b.style.background = c;
+    b.onclick = () => { state.settingsColor = c; renderSwatches(); updateSettingsAvatar(); };
+    wrap.appendChild(b);
+  }
+}
+function updateSettingsAvatar() {
+  const el = $("#settings-avatar");
+  el.textContent = initials($("#settings-name").value || state.me.displayName);
+  el.style.background = state.settingsColor;
+}
+$("#settings-name").addEventListener("input", updateSettingsAvatar);
+
+$("#settings-save").addEventListener("click", async () => {
+  $("#settings-error").textContent = "";
+  try {
+    const { user } = await api("/api/me", {
+      method: "PATCH",
+      body: JSON.stringify({ displayName: $("#settings-name").value.trim(), bio: $("#settings-bio").value, avatarColor: state.settingsColor }),
+    });
+    state.me = { ...state.me, ...user };
+    renderMe();
+    $("#settings-modal").classList.add("hidden");
+    refreshAll();
+  } catch (err) { $("#settings-error").textContent = err.message; }
+});
+
+$("#pw-save").addEventListener("click", async () => {
+  const msg = $("#pw-msg");
+  msg.className = "modal-msg";
+  msg.textContent = "";
+  try {
+    await api("/api/me/password", { method: "POST", body: JSON.stringify({ currentPassword: $("#pw-current").value, newPassword: $("#pw-new").value }) });
+    msg.textContent = "Password updated ✓";
+    msg.classList.add("ok");
+    $("#pw-current").value = "";
+    $("#pw-new").value = "";
+  } catch (err) { msg.textContent = err.message; msg.classList.add("err"); }
+});
+
 // ---------- Group creation ----------
 $("#new-group-btn").addEventListener("click", () => {
   $("#group-name").value = "";
@@ -281,7 +387,7 @@ $("#new-group-btn").addEventListener("click", () => {
     for (const f of state.friends) {
       const li = document.createElement("li");
       li.className = "picker-item";
-      li.innerHTML = `<label><input type="checkbox" value="${f.id}" /> <span class="avatar sm">${initials(f.displayName)}</span> ${escapeHtml(f.displayName)}</label>`;
+      li.innerHTML = `<label><input type="checkbox" value="${f.id}" /> ${avatarHtml(f, "sm")} ${escapeHtml(f.displayName)}</label>`;
       picker.appendChild(li);
     }
   }

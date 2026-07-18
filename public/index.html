@@ -41,10 +41,11 @@
   <div id="app" class="app hidden">
     <aside class="sidebar">
       <div class="sidebar-head">
-        <div class="me">
+        <button class="me" id="me-profile-btn" type="button" title="Edit your profile">
           <span class="avatar" id="me-avatar"></span>
           <span class="me-name" id="me-name"></span>
-        </div>
+          <span class="me-edit">✎</span>
+        </button>
         <button id="logout-btn" class="icon-btn" title="Log out" type="button">⏻</button>
       </div>
 
@@ -83,7 +84,7 @@
       </div>
 
       <section id="chat-active" class="chat-active hidden">
-        <header class="chat-header">
+        <header class="chat-header" id="chat-header" title="View profile">
           <span class="avatar" id="peer-avatar"></span>
           <div>
             <div class="peer-name" id="peer-name"></div>
@@ -97,6 +98,58 @@
         </form>
       </section>
     </main>
+  </div>
+
+  <!-- SETTINGS / EDIT PROFILE MODAL -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="profile-hero">
+        <span class="avatar xl" id="settings-avatar"></span>
+      </div>
+      <h3>Edit profile</h3>
+      <label class="modal-label">Display name
+        <input id="settings-name" class="modal-input" maxlength="40" />
+      </label>
+      <label class="modal-label">Bio
+        <textarea id="settings-bio" class="modal-input" rows="3" maxlength="200" placeholder="Tell people a bit about yourself…"></textarea>
+      </label>
+      <div class="modal-label">Avatar colour</div>
+      <div id="settings-colors" class="swatches"></div>
+      <p id="settings-error" class="modal-error"></p>
+      <div class="modal-actions">
+        <button id="settings-cancel" class="btn-ghost-sm" type="button">Cancel</button>
+        <button id="settings-save" class="btn-primary-sm" type="button">Save profile</button>
+      </div>
+
+      <div class="modal-divider"></div>
+      <h3>Change password</h3>
+      <label class="modal-label">Current password
+        <input id="pw-current" class="modal-input" type="password" autocomplete="current-password" />
+      </label>
+      <label class="modal-label">New password
+        <input id="pw-new" class="modal-input" type="password" autocomplete="new-password" placeholder="at least 6 characters" />
+      </label>
+      <p id="pw-msg" class="modal-msg"></p>
+      <div class="modal-actions">
+        <button id="pw-save" class="btn-primary-sm" type="button">Update password</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIEW PROFILE MODAL -->
+  <div id="profile-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="profile-hero">
+        <span class="avatar xl" id="profile-avatar"></span>
+        <div class="profile-name" id="profile-name"></div>
+        <div class="profile-username" id="profile-username"></div>
+      </div>
+      <p class="profile-bio" id="profile-bio"></p>
+      <div class="modal-actions">
+        <button id="profile-close" class="btn-ghost-sm" type="button">Close</button>
+        <button id="profile-message" class="btn-primary-sm hidden" type="button">Message</button>
+      </div>
+    </div>
   </div>
 
   <!-- NEW GROUP MODAL -->
