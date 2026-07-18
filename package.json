@@ -1,0 +1,15 @@
+{
+  "name": "wesellrugs-messenger",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Real-time messenger app on Cloudflare Workers, Durable Objects and D1",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute wesellrugs-db --local --file=./schema.sql",
+    "db:init:remote": "wrangler d1 execute wesellrugs-db --remote --file=./schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4.112.0"
+  }
+}

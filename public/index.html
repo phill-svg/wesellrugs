@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>We Sell Rugs — Messenger</title>
+  <meta name="description" content="A fast, private messenger." />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+</head>
+<body>
+  <!-- AUTH SCREEN -->
+  <div id="auth-screen" class="auth-screen">
+    <div class="auth-card">
+      <div class="auth-brand"><span class="logo">◈</span> We Sell Rugs</div>
+      <p class="auth-tagline">Sign in to start messaging.</p>
+
+      <div class="tabs">
+        <button class="tab active" data-tab="login" type="button">Log in</button>
+        <button class="tab" data-tab="register" type="button">Create account</button>
+      </div>
+
+      <form id="login-form" class="auth-form">
+        <label>Username<input name="username" autocomplete="username" required /></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required /></label>
+        <button type="submit" class="btn-primary">Log in</button>
+      </form>
+
+      <form id="register-form" class="auth-form hidden">
+        <label>Display name<input name="displayName" autocomplete="name" required /></label>
+        <label>Username<input name="username" autocomplete="username" required placeholder="letters, numbers, _" /></label>
+        <label>Password<input name="password" type="password" autocomplete="new-password" required placeholder="at least 6 characters" /></label>
+        <button type="submit" class="btn-primary">Create account</button>
+      </form>
+
+      <p id="auth-error" class="auth-error" role="alert"></p>
+    </div>
+  </div>
+
+  <!-- CHAT APP -->
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <div class="me">
+          <span class="avatar" id="me-avatar"></span>
+          <span class="me-name" id="me-name"></span>
+        </div>
+        <button id="logout-btn" class="icon-btn" title="Log out" type="button">⏻</button>
+      </div>
+
+      <div class="sidebar-section-title">Conversations</div>
+      <ul id="conversation-list" class="conv-list"></ul>
+
+      <div class="sidebar-section-title">People</div>
+      <ul id="people-list" class="people-list"></ul>
+    </aside>
+
+    <main class="chat">
+      <div id="chat-empty" class="chat-empty">
+        <div class="chat-empty-inner">
+          <span class="logo big">◈</span>
+          <p>Pick a person to start chatting.</p>
+        </div>
+      </div>
+
+      <section id="chat-active" class="chat-active hidden">
+        <header class="chat-header">
+          <span class="avatar" id="peer-avatar"></span>
+          <div>
+            <div class="peer-name" id="peer-name"></div>
+            <div class="peer-status" id="peer-status">@username</div>
+          </div>
+        </header>
+        <div id="messages" class="messages"></div>
+        <form id="composer" class="composer">
+          <input id="composer-input" autocomplete="off" placeholder="Type a message…" />
+          <button type="submit" class="btn-send" title="Send">➤</button>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
