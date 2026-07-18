@@ -712,7 +712,7 @@ async function handleApi(request, env, url) {
   if (pathname === "/api/conversations" && method === "GET") {
     const { results: convs } = await db
       .prepare(
-        `SELECT c.id, c.type, c.name, c.description, c.avatar_url, c.created_at, p.last_read_at,
+        `SELECT c.id, c.type, c.name, c.description, c.avatar_url, c.disappear_seconds, c.created_at, p.last_read_at,
                 (SELECT body FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_body,
                 (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_at,
                 (SELECT u.display_name FROM messages m JOIN users u ON u.id = m.sender_id
@@ -761,6 +761,7 @@ async function handleApi(request, env, url) {
         title: isGroup ? c.name : members[0]?.displayName || "Unknown",
         description: c.description || "",
         avatarUrl: isGroup ? c.avatar_url || "" : "",
+        disappearSeconds: c.disappear_seconds || 0,
         members,
         other: isGroup ? null : members[0] || null,
         unread: c.unread || 0,
@@ -789,13 +790,28 @@ async function handleApi(request, env, url) {
     const convId = url.searchParams.get("conversation");
     if (!convId || !(await isParticipant(db, convId, me.id)))
       return json({ error: "No access to this conversation." }, { status: 403 });
+    // Purge any expired (disappeared) messages first, including their images.
+    const nowTs = Date.now();
+    const { results: expired } = await db
+      .prepare("SELECT image_url FROM messages WHERE conversation_id = ? AND expires_at IS NOT NULL AND expires_at <= ? AND image_url IS NOT NULL")
+      .bind(convId, nowTs)
+      .all();
+    for (const r of expired) {
+      if (r.image_url && r.image_url.startsWith("/api/message-image/")) {
+        const key = r.image_url.slice("/api/message-image/".length).split("?")[0];
+        await env.AVATARS.delete("messages/" + decodeURIComponent(key)).catch(() => {});
+      }
+    }
+    await db.prepare("DELETE FROM messages WHERE conversation_id = ? AND expires_at IS NOT NULL AND expires_at <= ?").bind(convId, nowTs).run();
+
     const { results } = await db
       .prepare(
-        `SELECT m.id, m.sender_id, u.display_name AS sender_name, m.body, m.image_url, m.created_at
+        `SELECT m.id, m.sender_id, u.display_name AS sender_name, m.body, m.image_url, m.expires_at, m.created_at
          FROM messages m JOIN users u ON u.id = m.sender_id
-         WHERE m.conversation_id = ? ORDER BY m.created_at ASC LIMIT 300`
+         WHERE m.conversation_id = ? AND (m.expires_at IS NULL OR m.expires_at > ?)
+         ORDER BY m.created_at ASC LIMIT 300`
       )
-      .bind(convId)
+      .bind(convId, nowTs)
       .all();
     // "Seen" state: the earliest read time among the OTHER participants.
     const readRow = await db
@@ -810,9 +826,21 @@ async function handleApi(request, env, url) {
         senderName: r.sender_name,
         body: r.body,
         imageUrl: r.image_url || "",
+        expiresAt: r.expires_at || 0,
         createdAt: r.created_at,
       })),
     });
+  }
+
+  // ---- Set the disappearing-messages timer for a conversation ----
+  if (pathname === "/api/conversation/disappearing" && method === "POST") {
+    const { conversationId, seconds } = await request.json().catch(() => ({}));
+    if (!conversationId || !(await isParticipant(db, conversationId, me.id)))
+      return json({ error: "No access to this conversation." }, { status: 403 });
+    const allowed = [0, 5, 10, 30, 60, 3600, 86400];
+    const secs = allowed.includes(seconds) ? seconds : 0;
+    await db.prepare("UPDATE conversations SET disappear_seconds = ? WHERE id = ?").bind(secs, conversationId).run();
+    return json({ ok: true, seconds: secs });
   }
 
   return json({ error: "Not found." }, { status: 404 });

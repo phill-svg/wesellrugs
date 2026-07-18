@@ -65,6 +65,12 @@ export class ChatRoom {
       return;
     }
 
+    // Disappearing-messages timer changed — relay so the other side updates its UI.
+    if (data.type === "disappear") {
+      this.broadcastExcept(ws, JSON.stringify({ type: "disappear", conversationId: meta.conversationId, seconds: data.seconds | 0 }));
+      return;
+    }
+
     if (data.type === "message") {
       const body = typeof data.body === "string" ? data.body.trim().slice(0, 4000) : "";
       let imageUrl = typeof data.imageUrl === "string" ? data.imageUrl : "";
@@ -87,6 +93,13 @@ export class ChatRoom {
   async webSocketError() {}
 
   async persistAndBroadcast(meta, body, imageUrl) {
+    const conv = await this.env.DB
+      .prepare("SELECT disappear_seconds FROM conversations WHERE id = ?")
+      .bind(meta.conversationId)
+      .first();
+    const secs = conv && conv.disappear_seconds ? conv.disappear_seconds : 0;
+    const createdAt = Date.now();
+    const expiresAt = secs > 0 ? createdAt + secs * 1000 : null;
     const message = {
       id: randomId(12),
       conversationId: meta.conversationId,
@@ -94,12 +107,13 @@ export class ChatRoom {
       senderName: meta.displayName,
       body,
       imageUrl: imageUrl || "",
-      createdAt: Date.now(),
+      expiresAt,
+      createdAt,
     };
     await this.env.DB.prepare(
-      "INSERT INTO messages (id, conversation_id, sender_id, body, image_url, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+      "INSERT INTO messages (id, conversation_id, sender_id, body, image_url, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
     )
-      .bind(message.id, message.conversationId, message.senderId, message.body, message.imageUrl || null, message.createdAt)
+      .bind(message.id, message.conversationId, message.senderId, message.body, message.imageUrl || null, expiresAt, createdAt)
       .run();
 
     const payload = JSON.stringify({ type: "message", message });

@@ -98,7 +98,10 @@
             <div class="peer-name" id="peer-name"></div>
             <div class="peer-status" id="peer-status"></div>
           </div>
-          <button type="button" id="call-btn" class="call-btn hidden" title="Video call" aria-label="Video call">📹</button>
+          <div class="header-actions">
+            <button type="button" id="timer-btn" class="call-btn hidden" title="Disappearing messages" aria-label="Disappearing messages">⏱️</button>
+            <button type="button" id="call-btn" class="call-btn hidden" title="Video call" aria-label="Video call">📹</button>
+          </div>
         </header>
         <div id="messages" class="messages"></div>
         <div id="read-receipt" class="read-receipt"></div>
@@ -219,6 +222,21 @@
         <button id="group-cancel" class="btn-ghost-sm" type="button">Cancel</button>
         <button id="group-create" class="btn-primary-sm" type="button">Create group</button>
       </div>
+    </div>
+  </div>
+
+  <!-- DISAPPEARING MESSAGES MENU -->
+  <div id="timer-menu" class="timer-menu hidden">
+    <div class="timer-menu-card">
+      <div class="timer-menu-title">Disappearing messages</div>
+      <p class="timer-menu-sub">New messages vanish for everyone after:</p>
+      <button class="timer-opt" data-secs="0">Off</button>
+      <button class="timer-opt" data-secs="5">5 seconds</button>
+      <button class="timer-opt" data-secs="10">10 seconds</button>
+      <button class="timer-opt" data-secs="30">30 seconds</button>
+      <button class="timer-opt" data-secs="60">1 minute</button>
+      <button class="timer-opt" data-secs="3600">1 hour</button>
+      <button class="timer-opt" data-secs="86400">1 day</button>
     </div>
   </div>
 

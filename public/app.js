@@ -395,6 +395,8 @@ async function openConversation(conv) {
   } else {
     $("#peer-status").textContent = conv.other ? "@" + conv.other.username + (conv.other.online ? " · online" : "") : "";
   }
+  $("#timer-btn").classList.remove("hidden");
+  updateDisappearIndicator();
   $("#messages").innerHTML = "";
   state.othersReadAt = 0;
   state.lastOutgoingAt = 0;
@@ -434,6 +436,11 @@ function connectWs(convId) {
         return;
       }
       if (typeof data.type === "string" && data.type.startsWith("call:")) { handleSignal(data); return; }
+      if (data.type === "disappear" && state.activeConv && data.conversationId === state.activeConv.id) {
+        state.activeConv.disappearSeconds = data.seconds || 0;
+        updateDisappearIndicator();
+        return;
+      }
       if (data.type === "message" && state.activeConv && data.message.conversationId === state.activeConv.id) {
         renderMessage(data.message);
         scrollBottom();
@@ -490,9 +497,10 @@ async function refreshActiveMessages() {
 function renderMessage(m) {
   if (state.renderedIds.has(m.id)) return;
   state.renderedIds.add(m.id);
+  if (m.expiresAt && m.expiresAt <= Date.now()) return; // already disappeared
   const mine = m.senderId === state.me.id;
   const div = document.createElement("div");
-  div.className = "msg " + (mine ? "me" : "them") + (m.imageUrl ? " has-image" : "");
+  div.className = "msg " + (mine ? "me" : "them") + (m.imageUrl ? " has-image" : "") + (m.expiresAt ? " ephemeral" : "");
   const showName = !mine && state.activeConv && state.activeConv.type === "group";
   const nameLabel = showName ? `<span class="msg-sender">${escapeHtml(m.senderName)}</span>` : "";
   const image = m.imageUrl
@@ -504,6 +512,10 @@ function renderMessage(m) {
   // Someone who just sent a message isn't typing anymore.
   if (state.typers[m.senderId]) { delete state.typers[m.senderId]; renderTyping(); }
   if (mine) { state.lastOutgoingAt = Math.max(state.lastOutgoingAt, m.createdAt); updateSeen(); }
+  if (m.expiresAt) {
+    const ms = m.expiresAt - Date.now();
+    setTimeout(() => div.remove(), Math.max(0, Math.min(ms, 2147483000)));
+  }
 }
 
 function sendRead() {
@@ -897,6 +909,37 @@ $("#group-create").addEventListener("click", async () => {
     const members = state.friends.filter((f) => memberIds.includes(f.id));
     openConversation({ id: conversationId, type: "group", title: name, members });
   } catch (err) { $("#group-error").textContent = err.message; }
+});
+
+// ---------- Disappearing messages ----------
+const DISAPPEAR_LABELS = { 0: "off", 5: "5s", 10: "10s", 30: "30s", 60: "1m", 3600: "1h", 86400: "1d" };
+function disappearLabel(s) { return DISAPPEAR_LABELS[s] || "off"; }
+function updateDisappearIndicator() {
+  const secs = (state.activeConv && state.activeConv.disappearSeconds) || 0;
+  const btn = $("#timer-btn");
+  btn.classList.toggle("active", secs > 0);
+  btn.title = secs > 0 ? "Disappearing: " + disappearLabel(secs) : "Disappearing messages: off";
+}
+async function setDisappear(seconds) {
+  $("#timer-menu").classList.add("hidden");
+  if (!state.activeConv) return;
+  try {
+    const r = await api("/api/conversation/disappearing", { method: "POST", body: JSON.stringify({ conversationId: state.activeConv.id, seconds }) });
+    state.activeConv.disappearSeconds = r.seconds;
+    sendSignal({ type: "disappear", seconds: r.seconds });
+    updateDisappearIndicator();
+  } catch (e) { alert(e.message); }
+}
+$(".header-actions").addEventListener("click", (e) => e.stopPropagation());
+$("#timer-btn").addEventListener("click", () => {
+  const secs = (state.activeConv && state.activeConv.disappearSeconds) || 0;
+  document.querySelectorAll(".timer-opt").forEach((b) => b.classList.toggle("selected", Number(b.dataset.secs) === secs));
+  $("#timer-menu").classList.remove("hidden");
+});
+$("#timer-menu").addEventListener("click", (e) => {
+  if (e.target.id === "timer-menu") { $("#timer-menu").classList.add("hidden"); return; }
+  const opt = e.target.closest(".timer-opt");
+  if (opt) setDisappear(Number(opt.dataset.secs));
 });
 
 // ---------- Video calls (WebRTC) ----------
