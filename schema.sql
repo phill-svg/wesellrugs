@@ -19,8 +19,21 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
 CREATE TABLE IF NOT EXISTS conversations (
   id         TEXT PRIMARY KEY,
+  type       TEXT NOT NULL DEFAULT 'dm',   -- 'dm' | 'group'
+  name       TEXT,                          -- group name (null for DMs)
+  created_by TEXT,                          -- creator user id (groups)
   created_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS friendships (
+  user_a     TEXT NOT NULL,   -- requester
+  user_b     TEXT NOT NULL,   -- addressee
+  status     TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'accepted'
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_a, user_b)
+);
+CREATE INDEX IF NOT EXISTS idx_friend_b ON friendships(user_b);
+CREATE INDEX IF NOT EXISTS idx_friend_a ON friendships(user_a);
 
 CREATE TABLE IF NOT EXISTS participants (
   conversation_id TEXT NOT NULL,
