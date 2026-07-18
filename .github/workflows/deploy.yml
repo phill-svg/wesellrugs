@@ -1,7 +1,7 @@
 name: Deploy to Cloudflare
 
 # Auto-deploys the messenger to Cloudflare on every push to main.
-# Requires one repo secret: CLOUDFLARE_API_TOKEN
+# Requires one repo secret named 'API' holding a Cloudflare API token
 #   (Cloudflare dashboard → My Profile → API Tokens → Create Token →
 #    "Edit Cloudflare Workers" template → include D1 edit permission.)
 
@@ -28,5 +28,5 @@ jobs:
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          apiToken: ${{ secrets.API }}
           wranglerVersion: "4.112.0"
