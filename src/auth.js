@@ -74,13 +74,14 @@ export async function getUser(request, db) {
   if (!token) return null;
   const row = await db
     .prepare(
-      `SELECT u.id, u.username, u.display_name, u.bio, u.avatar_color, u.avatar_url, s.expires_at
+      `SELECT u.id, u.username, u.display_name, u.bio, u.avatar_color, u.avatar_url, u.banned, s.expires_at
        FROM sessions s JOIN users u ON u.id = s.user_id
        WHERE s.token = ?`
     )
     .bind(token)
     .first();
   if (!row) return null;
+  if (row.banned) return null;
   if (row.expires_at < Date.now()) {
     await db.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run();
     return null;

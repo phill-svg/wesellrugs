@@ -11,7 +11,7 @@ import {
 } from "./auth.js";
 
 export { ChatRoom } from "./chat-room.js";
-import { getVapidKeys } from "./push.js";
+import { getVapidKeys, sendPush } from "./push.js";
 
 const json = (data, init = {}) =>
   new Response(JSON.stringify(data), {
@@ -31,6 +31,21 @@ const isOnline = (lastSeen) => !!lastSeen && Date.now() - lastSeen < ONLINE_WIND
 // Overridable via the ADMIN_USER_ID binding (used for local testing).
 const ADMIN_USER_ID_DEFAULT = "d5bea6365224d406d1673296";
 const adminIdFor = (env) => (env.ADMIN_USER_ID && String(env.ADMIN_USER_ID).trim()) || ADMIN_USER_ID_DEFAULT;
+
+// System account used for broadcast/announcement messages.
+const SYSTEM_USER_ID = "wsr_system_account";
+const SYSTEM_USERNAME = "wesellrugs";
+
+async function ensureSystemUser(db) {
+  const now = Date.now();
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO users (id, username, display_name, password_hash, salt, avatar_color, bio, created_at)
+       VALUES (?, ?, 'We Sell Rugs', ?, ?, '#8a4b38', 'Official announcements', ?)`
+    )
+    .bind(SYSTEM_USER_ID, SYSTEM_USERNAME, randomId(32), randomId(16), now)
+    .run();
+}
 
 // Deterministic conversation id for a 1:1 DM between two user ids.
 function dmConversationId(a, b) {
@@ -137,6 +152,7 @@ async function handleApi(request, env, url) {
     const attempt = await hashPassword(password || "", row.salt);
     if (!safeEqual(attempt, row.password_hash))
       return json({ error: "Invalid username or password." }, { status: 401 });
+    if (row.banned) return json({ error: "This account has been suspended." }, { status: 403 });
     const token = await createSession(db, row.id);
     return json(
       {
@@ -166,9 +182,12 @@ async function handleApi(request, env, url) {
 
   if (pathname === "/api/me" && method === "GET") return json({ user: { ...me, isAdmin: me.id === adminId } });
 
-  // ---- Admin dashboard data (owner only) ----
+  // ---- Admin (owner only) — one guard for every /api/admin/* route ----
+  if (pathname.startsWith("/api/admin/") && me.id !== adminId)
+    return json({ error: "Not authorised." }, { status: 403 });
+
+  // ---- Admin dashboard data ----
   if (pathname === "/api/admin/data" && method === "GET") {
-    if (me.id !== adminId) return json({ error: "Not authorised." }, { status: 403 });
     const counts = await db
       .prepare(
         `SELECT (SELECT COUNT(*) FROM users) AS users,
@@ -179,8 +198,10 @@ async function handleApi(request, env, url) {
       .first();
     const { results: users } = await db
       .prepare(
-        `SELECT id, username, display_name, bio, avatar_url, last_seen, created_at FROM users ORDER BY created_at DESC`
+        `SELECT id, username, display_name, bio, avatar_url, last_seen, banned, created_at FROM users
+         WHERE id != ? ORDER BY created_at DESC`
       )
+      .bind(SYSTEM_USER_ID)
       .all();
     const { results: messages } = await db
       .prepare(
@@ -203,6 +224,7 @@ async function handleApi(request, env, url) {
         avatarUrl: u.avatar_url || "",
         online: isOnline(u.last_seen),
         lastSeen: u.last_seen || 0,
+        banned: !!u.banned,
         createdAt: u.created_at,
       })),
       messages: messages.map((m) => ({
@@ -215,6 +237,104 @@ async function handleApi(request, env, url) {
         createdAt: m.created_at,
       })),
     });
+  }
+
+  // ---- Delete a message (and its image) ----
+  if (pathname === "/api/admin/message/delete" && method === "POST") {
+    const { messageId } = await request.json().catch(() => ({}));
+    const row = await db.prepare("SELECT image_url FROM messages WHERE id = ?").bind(messageId).first();
+    if (!row) return json({ error: "Message not found." }, { status: 404 });
+    if (row.image_url && row.image_url.startsWith("/api/message-image/")) {
+      const key = row.image_url.slice("/api/message-image/".length).split("?")[0];
+      await env.AVATARS.delete("messages/" + decodeURIComponent(key)).catch(() => {});
+    }
+    await db.prepare("DELETE FROM messages WHERE id = ?").bind(messageId).run();
+    return json({ ok: true });
+  }
+
+  // ---- Ban / unban a user ----
+  if (pathname === "/api/admin/user/ban" && method === "POST") {
+    const { userId, banned } = await request.json().catch(() => ({}));
+    if (userId === adminId || userId === SYSTEM_USER_ID) return json({ error: "Can't ban this account." }, { status: 400 });
+    await db.prepare("UPDATE users SET banned = ? WHERE id = ?").bind(banned ? 1 : 0, userId).run();
+    if (banned) await db.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId).run();
+    return json({ ok: true, banned: !!banned });
+  }
+
+  // ---- Force-logout a user ----
+  if (pathname === "/api/admin/user/logout" && method === "POST") {
+    const { userId } = await request.json().catch(() => ({}));
+    await db.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId).run();
+    return json({ ok: true });
+  }
+
+  // ---- Reset a user's password (owner sets a temporary one to relay) ----
+  if (pathname === "/api/admin/user/reset-password" && method === "POST") {
+    const { userId } = await request.json().catch(() => ({}));
+    const user = await db.prepare("SELECT id FROM users WHERE id = ?").bind(userId).first();
+    if (!user) return json({ error: "User not found." }, { status: 404 });
+    const tempPassword = "rug-" + randomId(4);
+    const salt = randomId(16);
+    const password_hash = await hashPassword(tempPassword, salt);
+    await db.prepare("UPDATE users SET password_hash = ?, salt = ? WHERE id = ?").bind(password_hash, salt, userId).run();
+    await db.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId).run();
+    return json({ ok: true, tempPassword });
+  }
+
+  // ---- Delete a user and all their data ----
+  if (pathname === "/api/admin/user/delete" && method === "POST") {
+    const { userId } = await request.json().catch(() => ({}));
+    if (userId === adminId || userId === SYSTEM_USER_ID) return json({ error: "Can't delete this account." }, { status: 400 });
+    await env.AVATARS.delete("avatars/" + userId).catch(() => {});
+    await db.prepare("DELETE FROM messages WHERE sender_id = ?").bind(userId).run();
+    await db.prepare("DELETE FROM participants WHERE user_id = ?").bind(userId).run();
+    await db.prepare("DELETE FROM friendships WHERE user_a = ? OR user_b = ?").bind(userId, userId).run();
+    await db.prepare("DELETE FROM push_subscriptions WHERE user_id = ?").bind(userId).run();
+    await db.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId).run();
+    await db.prepare("DELETE FROM conversations WHERE id NOT IN (SELECT DISTINCT conversation_id FROM participants)").run();
+    await db.prepare("DELETE FROM users WHERE id = ?").bind(userId).run();
+    return json({ ok: true });
+  }
+
+  // ---- Broadcast an announcement to every user ----
+  if (pathname === "/api/admin/broadcast" && method === "POST") {
+    const { message } = await request.json().catch(() => ({}));
+    const body = (message || "").toString().trim().slice(0, 2000);
+    if (!body) return json({ error: "Write a message to send." }, { status: 400 });
+    await ensureSystemUser(db);
+    const { results: recipients } = await db
+      .prepare("SELECT id FROM users WHERE id != ? AND banned = 0")
+      .bind(SYSTEM_USER_ID)
+      .all();
+    const now = Date.now();
+    let sent = 0;
+    for (const r of recipients) {
+      const convId = "dm_" + [SYSTEM_USER_ID, r.id].sort().join("_");
+      await db.prepare("INSERT OR IGNORE INTO conversations (id, type, created_at) VALUES (?, 'dm', ?)").bind(convId, now).run();
+      await db
+        .prepare("INSERT OR IGNORE INTO participants (conversation_id, user_id) VALUES (?, ?), (?, ?)")
+        .bind(convId, SYSTEM_USER_ID, convId, r.id)
+        .run();
+      await db
+        .prepare("INSERT INTO messages (id, conversation_id, sender_id, body, created_at) VALUES (?, ?, ?, ?, ?)")
+        .bind(randomId(12), convId, SYSTEM_USER_ID, body, now + sent)
+        .run();
+      sent++;
+    }
+    // Push to everyone who has notifications on.
+    try {
+      const { results: subs } = await db.prepare("SELECT endpoint FROM push_subscriptions").all();
+      if (subs.length) {
+        const vapid = await getVapidKeys(db);
+        for (const s of subs) {
+          try {
+            const status = await sendPush(s.endpoint, vapid);
+            if (status === 404 || status === 410) await db.prepare("DELETE FROM push_subscriptions WHERE endpoint = ?").bind(s.endpoint).run();
+          } catch {}
+        }
+      }
+    } catch {}
+    return json({ ok: true, sent });
   }
 
   // ---- Presence heartbeat ----
@@ -366,10 +486,10 @@ async function handleApi(request, env, url) {
     const { results } = await db
       .prepare(
         `SELECT id, username, display_name, bio, avatar_color, avatar_url, last_seen FROM users
-         WHERE id != ? AND (lower(username) LIKE ? OR lower(display_name) LIKE ?)
+         WHERE id != ? AND id != ? AND (lower(username) LIKE ? OR lower(display_name) LIKE ?)
          ORDER BY display_name LIMIT 20`
       )
-      .bind(me.id, like, like)
+      .bind(me.id, SYSTEM_USER_ID, like, like)
       .all();
     const users = [];
     for (const r of results) {

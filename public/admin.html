@@ -6,9 +6,9 @@
   <title>We Sell Rugs — Admin</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <style>
-    :root{--bg:#0f1115;--panel:#171a21;--panel-2:#1e222b;--line:#2a2f3a;--text:#e7e9ee;--soft:#9aa2b1;--accent:#3b82f6;--ok:#22c55e;}
+    :root{--bg:#0f1115;--panel:#171a21;--panel-2:#1e222b;--line:#2a2f3a;--text:#e7e9ee;--soft:#9aa2b1;--accent:#3b82f6;--ok:#22c55e;--danger:#ef4444;--warn:#f59e0b;}
     *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:20px;max-width:1100px;margin:0 auto}
+    body{margin:0 auto;max-width:1100px;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:20px}
     h1{font-size:1.5rem;margin:0 0 4px} h2{font-size:1.05rem;margin:26px 0 10px;color:var(--soft);text-transform:uppercase;letter-spacing:.08em}
     a{color:var(--accent)}
     .head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
@@ -17,7 +17,7 @@
     .card b{display:block;font-size:1.9rem} .card span{color:var(--soft);font-size:.82rem}
     .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
     table{width:100%;border-collapse:collapse;font-size:.9rem;background:var(--panel)}
-    th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;max-width:360px;overflow:hidden;text-overflow:ellipsis}
+    th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;max-width:340px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
     th{color:var(--soft);font-weight:600;font-size:.78rem;text-transform:uppercase;letter-spacing:.05em}
     tr:last-child td{border-bottom:0}
     .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#555;margin-right:6px;vertical-align:middle}
@@ -25,10 +25,19 @@
     .muted{color:var(--soft)} .mono{font-family:ui-monospace,monospace;font-size:.82rem}
     .thumb{width:34px;height:34px;border-radius:6px;object-fit:cover;vertical-align:middle}
     .pill{background:var(--panel-2);border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:.75rem;color:var(--soft)}
+    .pill.banned{background:#3a1414;border-color:#61201d;color:#f3a29a}
     .note{background:#3b2a12;border:1px solid #614611;color:#f3d8a6;padding:8px 12px;border-radius:10px;font-size:.85rem;margin:14px 0}
     #denied,#loading{padding:40px;text-align:center;color:var(--soft)}
-    .btn{background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:8px 14px;cursor:pointer;font-weight:600}
+    .btn{background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:7px 12px;cursor:pointer;font-weight:600;font-size:.85rem}
     .btn:hover{border-color:var(--accent)}
+    .btn.sm{padding:4px 9px;font-size:.78rem;margin:0 2px 0 0}
+    .btn.danger:hover{border-color:var(--danger);color:#ffb4ad}
+    .btn.warn:hover{border-color:var(--warn);color:#f7cd7a}
+    .actions{white-space:nowrap}
+    .broadcast{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:16px}
+    textarea{width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:10px;font:inherit;resize:vertical;min-height:70px}
+    .broadcast .row{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
+    .send-msg{font-size:.85rem}
   </style>
 </head>
 <body>
@@ -41,24 +50,27 @@
 
   <div id="dash" style="display:none">
     <div class="head">
-      <div>
-        <h1>Admin dashboard</h1>
-        <div class="muted">We Sell Rugs — owner view</div>
-      </div>
-      <div>
-        <button class="btn" onclick="load()">Refresh</button>
-        <a class="btn" href="/" style="text-decoration:none;margin-left:6px">← App</a>
-      </div>
+      <div><h1>Admin dashboard</h1><div class="muted">We Sell Rugs — owner view</div></div>
+      <div><button class="btn" onclick="load()">Refresh</button> <a class="btn" href="/" style="text-decoration:none">← App</a></div>
     </div>
 
-    <div class="note">🔒 Passwords are stored one-way hashed and cannot be shown here or anywhere — this is by design.</div>
+    <div class="note">🔒 Passwords are stored one-way hashed and can't be shown. Use “Reset PW” to give a locked-out user a new temporary password.</div>
 
     <div class="cards" id="cards"></div>
+
+    <h2>📣 Broadcast to everyone</h2>
+    <div class="broadcast">
+      <textarea id="broadcast-text" placeholder="Write an announcement — it's sent to every user from “We Sell Rugs” and pushed as a notification."></textarea>
+      <div class="row">
+        <span id="broadcast-msg" class="send-msg muted"></span>
+        <button class="btn" onclick="broadcast()">Send announcement</button>
+      </div>
+    </div>
 
     <h2>Users (<span id="ucount">0</span>)</h2>
     <div class="tablewrap">
       <table>
-        <thead><tr><th></th><th>Display name</th><th>Username</th><th>Bio</th><th>Joined</th></tr></thead>
+        <thead><tr><th></th><th>Name</th><th>Username</th><th>Status</th><th>Joined</th><th>Actions</th></tr></thead>
         <tbody id="users"></tbody>
       </table>
     </div>
@@ -66,7 +78,7 @@
     <h2>Messages (latest 300)</h2>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>When</th><th>From</th><th>Chat</th><th>Message</th></tr></thead>
+        <thead><tr><th>When</th><th>From</th><th>Chat</th><th>Message</th><th></th></tr></thead>
         <tbody id="messages"></tbody>
       </table>
     </div>
@@ -77,20 +89,25 @@
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
     const fmt = (ts) => new Date(ts).toLocaleString([], { dateStyle:"medium", timeStyle:"short" });
 
+    async function post(path, bodyObj) {
+      const res = await fetch(path, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(bodyObj || {}) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Action failed");
+      return data;
+    }
+
     async function load() {
       let data;
       try {
         const res = await fetch("/api/admin/data");
-        if (res.status === 403 || res.status === 401) { $("#loading").style.display="none"; $("#denied").style.display="block"; return; }
+        if (res.status === 403 || res.status === 401) { $("#loading").style.display="none"; $("#denied").style.display="block"; $("#dash").style.display="none"; return; }
         data = await res.json();
       } catch { $("#loading").style.display="none"; $("#denied").style.display="block"; return; }
-
       $("#loading").style.display = "none";
       $("#dash").style.display = "block";
 
       const c = data.counts || {};
-      $("#cards").innerHTML =
-        card(c.users, "Users") + card(c.messages, "Messages") + card(c.chats, "Chats") + card(c.push_subs, "Push enabled");
+      $("#cards").innerHTML = card(c.users,"Users") + card(c.messages,"Messages") + card(c.chats,"Chats") + card(c.push_subs,"Push enabled");
       $("#ucount").textContent = (data.users || []).length;
 
       $("#users").innerHTML = (data.users || []).map((u) => `
@@ -98,8 +115,14 @@
           <td><span class="dot ${u.online ? "on" : ""}"></span>${u.avatarUrl ? `<img class="thumb" src="${esc(u.avatarUrl)}">` : ""}</td>
           <td>${esc(u.displayName)}</td>
           <td class="mono">@${esc(u.username)}</td>
-          <td class="muted">${esc(u.bio) || "—"}</td>
+          <td>${u.banned ? '<span class="pill banned">Banned</span>' : (u.online ? '<span class="pill">Online</span>' : '<span class="muted">—</span>')}</td>
           <td class="muted">${fmt(u.createdAt)}</td>
+          <td class="actions">
+            <button class="btn sm warn" onclick="banUser('${u.id}', ${u.banned ? 0 : 1}, '${esc(u.displayName)}')">${u.banned ? "Unban" : "Ban"}</button>
+            <button class="btn sm" onclick="resetPw('${u.id}', '${esc(u.displayName)}')">Reset PW</button>
+            <button class="btn sm" onclick="logoutUser('${u.id}')">Log out</button>
+            <button class="btn sm danger" onclick="deleteUser('${u.id}', '${esc(u.displayName)}')">Delete</button>
+          </td>
         </tr>`).join("");
 
       $("#messages").innerHTML = (data.messages || []).map((m) => `
@@ -108,9 +131,39 @@
           <td>${esc(m.sender)} <span class="mono muted">@${esc(m.senderUsername)}</span></td>
           <td><span class="pill">${esc(m.conversation)}</span></td>
           <td>${m.imageUrl ? `<img class="thumb" src="${esc(m.imageUrl)}"> ` : ""}${esc(m.body)}</td>
+          <td><button class="btn sm danger" onclick="delMessage('${m.id}')">Delete</button></td>
         </tr>`).join("");
     }
     function card(n, label) { return `<div class="card"><b>${n ?? 0}</b><span>${label}</span></div>`; }
+
+    async function broadcast() {
+      const text = $("#broadcast-text").value.trim();
+      if (!text) return;
+      if (!confirm("Send this announcement to every user?")) return;
+      const msg = $("#broadcast-msg");
+      msg.textContent = "Sending…";
+      try { const r = await post("/api/admin/broadcast", { message: text }); msg.textContent = `Sent to ${r.sent} user(s) ✓`; $("#broadcast-text").value = ""; load(); }
+      catch (e) { msg.textContent = e.message; }
+    }
+    async function banUser(id, banned, name) {
+      if (!confirm(`${banned ? "Ban" : "Unban"} ${name}?`)) return;
+      try { await post("/api/admin/user/ban", { userId: id, banned: !!banned }); load(); } catch (e) { alert(e.message); }
+    }
+    async function resetPw(id, name) {
+      if (!confirm(`Set a new temporary password for ${name}?`)) return;
+      try { const r = await post("/api/admin/user/reset-password", { userId: id }); alert(`New temporary password for ${name}:\n\n${r.tempPassword}\n\nGive it to them — they can change it in their settings.`); } catch (e) { alert(e.message); }
+    }
+    async function logoutUser(id) {
+      try { await post("/api/admin/user/logout", { userId: id }); alert("Logged out of all their devices."); } catch (e) { alert(e.message); }
+    }
+    async function deleteUser(id, name) {
+      if (!confirm(`Permanently DELETE ${name} and all their messages? This cannot be undone.`)) return;
+      try { await post("/api/admin/user/delete", { userId: id }); load(); } catch (e) { alert(e.message); }
+    }
+    async function delMessage(id) {
+      if (!confirm("Delete this message?")) return;
+      try { await post("/api/admin/message/delete", { messageId: id }); load(); } catch (e) { alert(e.message); }
+    }
     load();
   </script>
 </body>

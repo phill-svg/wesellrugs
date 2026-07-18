@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
   avatar_color  TEXT,
   avatar_url    TEXT,
   last_seen     INTEGER,
+  banned        INTEGER NOT NULL DEFAULT 0,
   created_at    INTEGER NOT NULL
 );
 
