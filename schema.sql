@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS users (
   display_name  TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   salt          TEXT NOT NULL,
+  bio           TEXT,
+  avatar_color  TEXT,
   created_at    INTEGER NOT NULL
 );
 

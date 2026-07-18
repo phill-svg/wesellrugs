@@ -18,6 +18,10 @@ const json = (data, init = {}) =>
     headers: { "Content-Type": "application/json", ...(init.headers || {}) },
   });
 
+// Curated avatar colours (no pink).
+const AVATAR_COLORS = ["#2f80ed", "#0ea5a4", "#10b981", "#f59e0b", "#f97316", "#ef4444", "#6366f1", "#64748b"];
+const pickColor = () => AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+
 // Deterministic conversation id for a 1:1 DM between two user ids.
 function dmConversationId(a, b) {
   return "dm_" + [a, b].sort().join("_");
@@ -98,12 +102,16 @@ async function handleApi(request, env, url) {
     const salt = randomId(16);
     const password_hash = await hashPassword(password, salt);
     const id = randomId(12);
+    const color = pickColor();
     await db
-      .prepare("INSERT INTO users (id, username, display_name, password_hash, salt, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .bind(id, u, name, password_hash, salt, Date.now())
+      .prepare("INSERT INTO users (id, username, display_name, password_hash, salt, avatar_color, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .bind(id, u, name, password_hash, salt, color, Date.now())
       .run();
     const token = await createSession(db, id);
-    return json({ user: { id, username: u, displayName: name } }, { headers: { "Set-Cookie": sessionCookie(token) } });
+    return json(
+      { user: { id, username: u, displayName: name, bio: "", avatarColor: color } },
+      { headers: { "Set-Cookie": sessionCookie(token) } }
+    );
   }
 
   // ---- Login ----
@@ -134,6 +142,47 @@ async function handleApi(request, env, url) {
 
   if (pathname === "/api/me" && method === "GET") return json({ user: me });
 
+  // ---- Update my profile (display name, bio, avatar colour) ----
+  if (pathname === "/api/me" && (method === "PATCH" || method === "PUT")) {
+    const { displayName, bio, avatarColor } = await request.json().catch(() => ({}));
+    const name = (displayName ?? me.displayName).toString().trim().slice(0, 40);
+    if (!name) return json({ error: "Display name can't be empty." }, { status: 400 });
+    const newBio = (bio ?? me.bio ?? "").toString().slice(0, 200);
+    let color = (avatarColor ?? me.avatarColor ?? "").toString();
+    if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) color = me.avatarColor || pickColor();
+    await db
+      .prepare("UPDATE users SET display_name = ?, bio = ?, avatar_color = ? WHERE id = ?")
+      .bind(name, newBio, color, me.id)
+      .run();
+    return json({ user: { id: me.id, username: me.username, displayName: name, bio: newBio, avatarColor: color } });
+  }
+
+  // ---- Change my password ----
+  if (pathname === "/api/me/password" && method === "POST") {
+    const { currentPassword, newPassword } = await request.json().catch(() => ({}));
+    if (!newPassword || newPassword.length < 6)
+      return json({ error: "New password must be at least 6 characters." }, { status: 400 });
+    const row = await db.prepare("SELECT password_hash, salt FROM users WHERE id = ?").bind(me.id).first();
+    const attempt = await hashPassword(currentPassword || "", row.salt);
+    if (!safeEqual(attempt, row.password_hash))
+      return json({ error: "Current password is incorrect." }, { status: 403 });
+    const salt = randomId(16);
+    const password_hash = await hashPassword(newPassword, salt);
+    await db.prepare("UPDATE users SET password_hash = ?, salt = ? WHERE id = ?").bind(password_hash, salt, me.id).run();
+    return json({ ok: true });
+  }
+
+  // ---- View another user's public profile ----
+  if (pathname === "/api/profile" && method === "GET") {
+    const id = url.searchParams.get("id");
+    const row = await db.prepare("SELECT id, username, display_name, bio, avatar_color FROM users WHERE id = ?").bind(id).first();
+    if (!row) return json({ error: "User not found." }, { status: 404 });
+    return json({
+      user: { id: row.id, username: row.username, displayName: row.display_name, bio: row.bio || "", avatarColor: row.avatar_color || "" },
+      friendState: await friendState(db, me.id, row.id),
+    });
+  }
+
   // ---- Search users ----
   if (pathname === "/api/users/search" && method === "GET") {
     const q = (url.searchParams.get("q") || "").trim().toLowerCase();
@@ -141,7 +190,7 @@ async function handleApi(request, env, url) {
     const like = "%" + q.replace(/[%_]/g, "") + "%";
     const { results } = await db
       .prepare(
-        `SELECT id, username, display_name FROM users
+        `SELECT id, username, display_name, bio, avatar_color FROM users
          WHERE id != ? AND (lower(username) LIKE ? OR lower(display_name) LIKE ?)
          ORDER BY display_name LIMIT 20`
       )
@@ -153,6 +202,8 @@ async function handleApi(request, env, url) {
         id: r.id,
         username: r.username,
         displayName: r.display_name,
+        bio: r.bio || "",
+        avatarColor: r.avatar_color || "",
         friendState: await friendState(db, me.id, r.id),
       });
     }
@@ -207,14 +258,22 @@ async function handleApi(request, env, url) {
   if (pathname === "/api/friends" && method === "GET") {
     const { results } = await db
       .prepare(
-        `SELECT u.id, u.username, u.display_name FROM friendships f
+        `SELECT u.id, u.username, u.display_name, u.bio, u.avatar_color FROM friendships f
          JOIN users u ON u.id = CASE WHEN f.user_a = ?1 THEN f.user_b ELSE f.user_a END
          WHERE (f.user_a = ?1 OR f.user_b = ?1) AND f.status = 'accepted'
          ORDER BY u.display_name`
       )
       .bind(me.id)
       .all();
-    return json({ friends: results.map((r) => ({ id: r.id, username: r.username, displayName: r.display_name })) });
+    return json({
+      friends: results.map((r) => ({
+        id: r.id,
+        username: r.username,
+        displayName: r.display_name,
+        bio: r.bio || "",
+        avatarColor: r.avatar_color || "",
+      })),
+    });
   }
 
   // ---- Incoming friend requests ----
@@ -288,7 +347,7 @@ async function handleApi(request, env, url) {
     // Gather participants for all these conversations in one query.
     const { results: parts } = await db
       .prepare(
-        `SELECT p.conversation_id, u.id, u.username, u.display_name
+        `SELECT p.conversation_id, u.id, u.username, u.display_name, u.bio, u.avatar_color
          FROM participants p JOIN users u ON u.id = p.user_id
          WHERE p.conversation_id IN (SELECT conversation_id FROM participants WHERE user_id = ?)`
       )
@@ -296,7 +355,13 @@ async function handleApi(request, env, url) {
       .all();
     const membersByConv = {};
     for (const r of parts) {
-      (membersByConv[r.conversation_id] ||= []).push({ id: r.id, username: r.username, displayName: r.display_name });
+      (membersByConv[r.conversation_id] ||= []).push({
+        id: r.id,
+        username: r.username,
+        displayName: r.display_name,
+        bio: r.bio || "",
+        avatarColor: r.avatar_color || "",
+      });
     }
 
     const conversations = convs.map((c) => {

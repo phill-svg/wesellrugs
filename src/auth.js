@@ -74,7 +74,7 @@ export async function getUser(request, db) {
   if (!token) return null;
   const row = await db
     .prepare(
-      `SELECT u.id, u.username, u.display_name, s.expires_at
+      `SELECT u.id, u.username, u.display_name, u.bio, u.avatar_color, s.expires_at
        FROM sessions s JOIN users u ON u.id = s.user_id
        WHERE s.token = ?`
     )
@@ -85,7 +85,13 @@ export async function getUser(request, db) {
     await db.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run();
     return null;
   }
-  return { id: row.id, username: row.username, displayName: row.display_name };
+  return {
+    id: row.id,
+    username: row.username,
+    displayName: row.display_name,
+    bio: row.bio || "",
+    avatarColor: row.avatar_color || "",
+  };
 }
 
 export async function deleteSession(request, db) {
