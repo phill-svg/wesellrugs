@@ -1,14 +1,14 @@
 :root {
-  --bg: #0f1115;
-  --panel: #171a21;
-  --panel-2: #1e222b;
-  --line: #2a2f3a;
-  --text: #e7e9ee;
-  --text-soft: #9aa2b1;
-  --accent: #6c8cff;
-  --accent-2: #5a7bff;
-  --bubble-me: #6c8cff;
-  --bubble-them: #232833;
+  --bg: #01040a;
+  --panel: #95058e;
+  --panel-2: #dadcdf;
+  --line: #010818;
+  --text: #020703;
+  --text-soft: #00050d;
+  --accent: #980909;
+  --accent-2: #600467;
+  --bubble-me: #0a9700;
+  --bubble-them: #820000;
   --danger: #ff6b6b;
   --ok: #4ade80;
   --radius: 14px;
@@ -20,7 +20,7 @@ body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
-  color: var(--text);
+  color: red(--text);
   -webkit-font-smoothing: antialiased;
 }
 .hidden { display: none !important; }
