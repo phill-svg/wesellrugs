@@ -203,6 +203,15 @@ textarea.modal-input { resize: vertical; font-family: inherit; }
 .typing-indicator { height: 0; overflow: hidden; padding: 0 20px; color: var(--text-soft); font-size: .82rem; font-style: italic; background: var(--panel); transition: height .12s ease; }
 .typing-indicator.show { height: 24px; line-height: 24px; }
 
+/* ---- READ RECEIPT ---- */
+.read-receipt { text-align: right; color: var(--text-soft); font-size: .72rem; padding: 2px 20px 0; background: var(--bg); }
+.read-receipt:empty { padding: 0; }
+
+/* ---- ENABLE NOTIFICATIONS BUTTON ---- */
+.btn-notif { width: 100%; padding: .7rem; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); color: var(--text); font-weight: 600; cursor: pointer; margin-top: .2rem; }
+.btn-notif:hover:not(:disabled) { border-color: var(--accent); }
+.btn-notif:disabled { opacity: .7; cursor: default; }
+
 /* ---- ATTACH / PHOTO MESSAGES ---- */
 .btn-attach { flex: none; width: 42px; height: 42px; border: 0; border-radius: 50%; background: var(--panel-2); font-size: 1.15rem; cursor: pointer; }
 .btn-attach:hover { background: var(--line); }

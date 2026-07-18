@@ -7,6 +7,13 @@
   <meta name="description" content="A fast, private messenger." />
   <link rel="stylesheet" href="styles.css" />
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#0f1115" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+  <meta name="apple-mobile-web-app-title" content="We Sell Rugs" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 </head>
 <body>
   <!-- AUTH SCREEN -->
@@ -93,6 +100,7 @@
           </div>
         </header>
         <div id="messages" class="messages"></div>
+        <div id="read-receipt" class="read-receipt"></div>
         <div id="typing-indicator" class="typing-indicator"></div>
         <form id="composer" class="composer">
           <button type="button" id="attach-btn" class="btn-attach" title="Send a photo">🖼️</button>
@@ -116,6 +124,11 @@
         <input id="avatar-file" type="file" accept="image/*" class="hidden" />
         <p id="avatar-msg" class="modal-msg"></p>
       </div>
+
+      <button id="enable-notifs-btn" class="btn-notif" type="button">🔔 Enable notifications</button>
+      <p id="notif-msg" class="modal-msg"></p>
+      <div class="modal-divider"></div>
+
       <h3>Edit profile</h3>
       <label class="modal-label">Display name
         <input id="settings-name" class="modal-input" maxlength="40" />

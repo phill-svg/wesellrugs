@@ -11,6 +11,7 @@ import {
 } from "./auth.js";
 
 export { ChatRoom } from "./chat-room.js";
+import { getVapidKeys } from "./push.js";
 
 const json = (data, init = {}) =>
   new Response(JSON.stringify(data), {
@@ -162,6 +163,61 @@ async function handleApi(request, env, url) {
   if (pathname === "/api/presence" && method === "POST") {
     await db.prepare("UPDATE users SET last_seen = ? WHERE id = ?").bind(Date.now(), me.id).run();
     return json({ ok: true });
+  }
+
+  // ---- Web Push: VAPID public key ----
+  if (pathname === "/api/push/key" && method === "GET") {
+    const v = await getVapidKeys(db);
+    return json({ publicKey: v.publicKeyB64 });
+  }
+
+  // ---- Web Push: save / remove a subscription ----
+  if (pathname === "/api/push/subscribe" && method === "POST") {
+    const { subscription } = await request.json().catch(() => ({}));
+    if (!subscription || !subscription.endpoint) return json({ error: "Invalid subscription." }, { status: 400 });
+    const keys = subscription.keys || {};
+    await db
+      .prepare("INSERT OR REPLACE INTO push_subscriptions (endpoint, user_id, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?)")
+      .bind(subscription.endpoint, me.id, keys.p256dh || null, keys.auth || null, Date.now())
+      .run();
+    return json({ ok: true });
+  }
+  if (pathname === "/api/push/unsubscribe" && method === "POST") {
+    const { endpoint } = await request.json().catch(() => ({}));
+    if (endpoint) await db.prepare("DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?").bind(endpoint, me.id).run();
+    return json({ ok: true });
+  }
+
+  // ---- Notification content for the service worker to display ----
+  if (pathname === "/api/notify-preview" && method === "GET") {
+    const latest = await db
+      .prepare(
+        `SELECT c.type, c.name, m.body, m.image_url, u.display_name AS sender_name
+         FROM participants p
+         JOIN conversations c ON c.id = p.conversation_id
+         JOIN messages m ON m.conversation_id = c.id
+         JOIN users u ON u.id = m.sender_id
+         WHERE p.user_id = ?1 AND m.sender_id != ?1 AND m.created_at > p.last_read_at
+         ORDER BY m.created_at DESC LIMIT 1`
+      )
+      .bind(me.id)
+      .first();
+    const cnt = await db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM messages m JOIN participants p ON p.conversation_id = m.conversation_id
+         WHERE p.user_id = ?1 AND m.sender_id != ?1 AND m.created_at > p.last_read_at`
+      )
+      .bind(me.id)
+      .first();
+    const count = cnt ? cnt.n : 0;
+    if (!latest) return json({ count: 0, title: "We Sell Rugs", body: "" });
+    const isGroup = latest.type === "group";
+    const preview = latest.body ? latest.body : latest.image_url ? "📷 Photo" : "";
+    return json({
+      count,
+      title: isGroup ? latest.name : latest.sender_name,
+      body: isGroup ? `${latest.sender_name}: ${preview}` : preview,
+    });
   }
 
   // ---- Upload an image to send in a chat ----
@@ -524,7 +580,13 @@ async function handleApi(request, env, url) {
       )
       .bind(convId)
       .all();
+    // "Seen" state: the earliest read time among the OTHER participants.
+    const readRow = await db
+      .prepare("SELECT MIN(last_read_at) AS r FROM participants WHERE conversation_id = ? AND user_id != ?")
+      .bind(convId, me.id)
+      .first();
     return json({
+      othersReadAt: (readRow && readRow.r) || 0,
       messages: results.map((r) => ({
         id: r.id,
         senderId: r.sender_id,

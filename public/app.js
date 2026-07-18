@@ -13,6 +13,8 @@ const state = {
   baseTitle: "We Sell Rugs",
   typers: {},      // userId -> { name, ts }
   typerTimers: {},
+  othersReadAt: 0, // for the open DM: when the other person last read
+  lastOutgoingAt: 0,
 };
 
 const AVATAR_COLORS = ["#2f80ed", "#0ea5a4", "#10b981", "#f59e0b", "#f97316", "#ef4444", "#6366f1", "#64748b"];
@@ -139,7 +141,7 @@ function enterApp(user) {
   $("#app").classList.remove("hidden");
   renderMe();
   refreshAll();
-  requestNotifyPermission();
+  registerServiceWorker();
   pingPresence();
   setInterval(pingPresence, 30000);
   // Poll for new messages / unread across all conversations, and backfill the open chat.
@@ -150,6 +152,56 @@ function enterApp(user) {
 }
 
 function pingPresence() { api("/api/presence", { method: "POST" }).catch(() => {}); }
+
+// ---------- Web Push notifications ----------
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return null;
+  try { return await navigator.serviceWorker.register("/sw.js"); } catch { return null; }
+}
+async function refreshNotifState() {
+  const btn = $("#enable-notifs-btn");
+  if (!btn) return;
+  if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+    btn.textContent = "🔔 Notifications not supported here";
+    btn.disabled = true;
+    return;
+  }
+  let subscribed = false;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (reg) subscribed = !!(await reg.pushManager.getSubscription());
+  } catch {}
+  if (Notification.permission === "granted" && subscribed) { btn.textContent = "🔔 Notifications are on"; btn.disabled = true; }
+  else if (Notification.permission === "denied") { btn.textContent = "🔕 Notifications blocked in browser settings"; btn.disabled = true; }
+  else { btn.textContent = "🔔 Enable notifications"; btn.disabled = false; }
+}
+async function enablePush() {
+  const msg = $("#notif-msg");
+  msg.className = "modal-msg";
+  msg.textContent = "";
+  if (!("Notification" in window) || !("PushManager" in window)) { msg.textContent = "This device doesn't support notifications."; msg.classList.add("err"); return; }
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { msg.textContent = "Permission not granted."; msg.classList.add("err"); return; }
+    const reg = (await navigator.serviceWorker.getRegistration()) || (await registerServiceWorker());
+    await navigator.serviceWorker.ready;
+    const { publicKey } = await api("/api/push/key");
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+    await api("/api/push/subscribe", { method: "POST", body: JSON.stringify({ subscription: sub.toJSON() }) });
+    msg.textContent = "Notifications enabled ✓";
+    msg.classList.add("ok");
+    refreshNotifState();
+  } catch (err) { msg.textContent = "Couldn't enable: " + err.message; msg.classList.add("err"); }
+}
 
 function requestNotifyPermission() {
   try {
@@ -342,9 +394,14 @@ async function openConversation(conv) {
     $("#peer-status").textContent = conv.other ? "@" + conv.other.username + (conv.other.online ? " · online" : "") : "";
   }
   $("#messages").innerHTML = "";
-  const { messages } = await api("/api/messages?conversation=" + encodeURIComponent(conv.id));
-  for (const m of messages) renderMessage(m);
+  state.othersReadAt = 0;
+  state.lastOutgoingAt = 0;
+  $("#read-receipt").textContent = "";
+  const data = await api("/api/messages?conversation=" + encodeURIComponent(conv.id));
+  state.othersReadAt = data.othersReadAt || 0;
+  for (const m of data.messages) renderMessage(m);
   scrollBottom();
+  updateSeen();
   connectWs(conv.id);
   document.querySelectorAll("#conversation-list .row-item").forEach((el) => el.classList.remove("active"));
   await markRead(conv.id);
@@ -360,7 +417,7 @@ function connectWs(convId) {
   const ws = new WebSocket(`${proto}//${location.host}/ws?conversation=${encodeURIComponent(convId)}`);
   state.ws = ws;
 
-  ws.addEventListener("open", startHeartbeat);
+  ws.addEventListener("open", () => { startHeartbeat(); sendRead(); });
   ws.addEventListener("message", (ev) => {
     if (ev.data === "pong") return;
     try {
@@ -369,10 +426,15 @@ function connectWs(convId) {
         showTyping(data.userId, data.displayName);
         return;
       }
+      if (data.type === "read" && state.activeConv && data.conversationId === state.activeConv.id && data.userId !== state.me.id) {
+        state.othersReadAt = Math.max(state.othersReadAt, data.at || 0);
+        updateSeen();
+        return;
+      }
       if (data.type === "message" && state.activeConv && data.message.conversationId === state.activeConv.id) {
         renderMessage(data.message);
         scrollBottom();
-        if (!document.hidden) { markRead(state.activeConv.id); state.notifiedAt[state.activeConv.id] = data.message.createdAt; }
+        if (!document.hidden) { markRead(state.activeConv.id); sendRead(); state.notifiedAt[state.activeConv.id] = data.message.createdAt; }
         loadConversations();
       }
     } catch {}
@@ -409,14 +471,16 @@ async function refreshActiveMessages() {
   if (!state.activeConv) return;
   const convId = state.activeConv.id;
   try {
-    const { messages } = await api("/api/messages?conversation=" + encodeURIComponent(convId));
+    const data = await api("/api/messages?conversation=" + encodeURIComponent(convId));
     if (!state.activeConv || state.activeConv.id !== convId) return;
+    if (typeof data.othersReadAt === "number") state.othersReadAt = Math.max(state.othersReadAt, data.othersReadAt);
     let added = false;
-    for (const m of messages) { if (!state.renderedIds.has(m.id)) { renderMessage(m); added = true; } }
+    for (const m of data.messages) { if (!state.renderedIds.has(m.id)) { renderMessage(m); added = true; } }
     if (added) {
       scrollBottom();
-      if (!document.hidden) markRead(convId);
+      if (!document.hidden) { markRead(convId); sendRead(); }
     }
+    updateSeen();
   } catch {}
 }
 
@@ -436,6 +500,19 @@ function renderMessage(m) {
   $("#messages").appendChild(div);
   // Someone who just sent a message isn't typing anymore.
   if (state.typers[m.senderId]) { delete state.typers[m.senderId]; renderTyping(); }
+  if (mine) { state.lastOutgoingAt = Math.max(state.lastOutgoingAt, m.createdAt); updateSeen(); }
+}
+
+function sendRead() {
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    try { state.ws.send(JSON.stringify({ type: "read" })); } catch {}
+  }
+}
+function updateSeen() {
+  const el = $("#read-receipt");
+  if (!el) return;
+  const seen = state.activeConv && state.activeConv.type === "dm" && state.lastOutgoingAt > 0 && state.othersReadAt >= state.lastOutgoingAt;
+  el.textContent = seen ? "Seen" : "";
 }
 
 $("#composer").addEventListener("submit", (e) => {
@@ -656,6 +733,7 @@ $("#ginfo-remove-btn").addEventListener("click", async () => {
 
 // ---------- Edit my profile (settings) ----------
 $("#me-profile-btn").addEventListener("click", openSettings);
+$("#enable-notifs-btn").addEventListener("click", enablePush);
 $("#settings-cancel").addEventListener("click", () => $("#settings-modal").classList.add("hidden"));
 $("#settings-modal").addEventListener("click", (e) => { if (e.target.id === "settings-modal") $("#settings-modal").classList.add("hidden"); });
 
@@ -672,6 +750,8 @@ function openSettings() {
   $("#avatar-remove-btn").classList.toggle("hidden", !state.me.avatarUrl);
   renderSwatches();
   updateSettingsAvatar();
+  $("#notif-msg").textContent = "";
+  refreshNotifState();
   $("#settings-modal").classList.remove("hidden");
 }
 

@@ -3,6 +3,7 @@
 // (they don't silently drop, and the DO can be evicted without losing sockets).
 
 import { randomId } from "./auth.js";
+import { getVapidKeys, sendPush } from "./push.js";
 
 export class ChatRoom {
   constructor(state, env) {
@@ -48,6 +49,16 @@ export class ChatRoom {
       return;
     }
 
+    if (data.type === "read") {
+      this.broadcastExcept(ws, JSON.stringify({
+        type: "read",
+        conversationId: meta.conversationId,
+        userId: meta.userId,
+        at: Date.now(),
+      }));
+      return;
+    }
+
     if (data.type === "message") {
       const body = typeof data.body === "string" ? data.body.trim().slice(0, 4000) : "";
       let imageUrl = typeof data.imageUrl === "string" ? data.imageUrl : "";
@@ -88,6 +99,41 @@ export class ChatRoom {
     const payload = JSON.stringify({ type: "message", message });
     for (const socket of this.state.getWebSockets()) {
       try { socket.send(payload); } catch {}
+    }
+
+    // Push to participants who aren't currently in this room.
+    try { await this.pushToAbsent(meta); } catch {}
+  }
+
+  // Send a web-push "tickle" to conversation members who don't have this room open.
+  async pushToAbsent(meta) {
+    const present = new Set();
+    for (const socket of this.state.getWebSockets()) {
+      const a = socket.deserializeAttachment();
+      if (a && a.userId) present.add(a.userId);
+    }
+    const { results: parts } = await this.env.DB
+      .prepare("SELECT user_id FROM participants WHERE conversation_id = ? AND user_id != ?")
+      .bind(meta.conversationId, meta.userId)
+      .all();
+    const targets = parts.map((r) => r.user_id).filter((uid) => !present.has(uid));
+    if (!targets.length) return;
+
+    const placeholders = targets.map(() => "?").join(",");
+    const { results: subs } = await this.env.DB
+      .prepare(`SELECT endpoint FROM push_subscriptions WHERE user_id IN (${placeholders})`)
+      .bind(...targets)
+      .all();
+    if (!subs.length) return;
+
+    const vapid = await getVapidKeys(this.env.DB);
+    for (const sub of subs) {
+      try {
+        const status = await sendPush(sub.endpoint, vapid);
+        if (status === 404 || status === 410) {
+          await this.env.DB.prepare("DELETE FROM push_subscriptions WHERE endpoint = ?").bind(sub.endpoint).run();
+        }
+      } catch {}
     }
   }
 }
