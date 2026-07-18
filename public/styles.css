@@ -188,6 +188,9 @@ body {
 textarea.modal-input { resize: vertical; font-family: inherit; }
 .modal { max-height: 90vh; overflow-y: auto; }
 
+/* ---- UNREAD BADGE ---- */
+.badge { flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: #fff; font-size: .72rem; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+
 /* ---- MOBILE ---- */
 @media (max-width: 720px) {
   .app { grid-template-columns: 1fr; }

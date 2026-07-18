@@ -40,6 +40,7 @@ CREATE INDEX IF NOT EXISTS idx_friend_a ON friendships(user_a);
 CREATE TABLE IF NOT EXISTS participants (
   conversation_id TEXT NOT NULL,
   user_id         TEXT NOT NULL,
+  last_read_at    INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (conversation_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);

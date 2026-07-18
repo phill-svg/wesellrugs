@@ -332,11 +332,15 @@ async function handleApi(request, env, url) {
   if (pathname === "/api/conversations" && method === "GET") {
     const { results: convs } = await db
       .prepare(
-        `SELECT c.id, c.type, c.name, c.created_at,
+        `SELECT c.id, c.type, c.name, c.created_at, p.last_read_at,
                 (SELECT body FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_body,
-                (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_at
+                (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_at,
+                (SELECT u.display_name FROM messages m JOIN users u ON u.id = m.sender_id
+                   WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_sender,
+                (SELECT COUNT(*) FROM messages m
+                   WHERE m.conversation_id = c.id AND m.created_at > p.last_read_at AND m.sender_id != ?1) AS unread
          FROM participants p JOIN conversations c ON c.id = p.conversation_id
-         WHERE p.user_id = ?
+         WHERE p.user_id = ?1
          ORDER BY COALESCE(
            (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1),
            c.created_at) DESC`
@@ -373,10 +377,23 @@ async function handleApi(request, env, url) {
         title: isGroup ? c.name : members[0]?.displayName || "Unknown",
         members,
         other: isGroup ? null : members[0] || null,
-        lastMessage: c.last_body ? { body: c.last_body, createdAt: c.last_at } : null,
+        unread: c.unread || 0,
+        lastMessage: c.last_body ? { body: c.last_body, createdAt: c.last_at, senderName: c.last_sender } : null,
       };
     });
     return json({ conversations });
+  }
+
+  // ---- Mark a conversation as read ----
+  if (pathname === "/api/conversations/read" && method === "POST") {
+    const { conversationId } = await request.json().catch(() => ({}));
+    if (!conversationId || !(await isParticipant(db, conversationId, me.id)))
+      return json({ error: "No access to this conversation." }, { status: 403 });
+    await db
+      .prepare("UPDATE participants SET last_read_at = ? WHERE conversation_id = ? AND user_id = ?")
+      .bind(Date.now(), conversationId, me.id)
+      .run();
+    return json({ ok: true });
   }
 
   // ---- Message history ----

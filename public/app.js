@@ -8,6 +8,9 @@ const state = {
   renderedIds: new Set(),
   friends: [],
   settingsColor: "",
+  notifiedAt: {}, // conversationId -> last message time we've handled
+  notifyInit: false,
+  baseTitle: "We Sell Rugs",
 };
 
 const AVATAR_COLORS = ["#2f80ed", "#0ea5a4", "#10b981", "#f59e0b", "#f97316", "#ef4444", "#6366f1", "#64748b"];
@@ -94,10 +97,54 @@ $("#logout-btn").addEventListener("click", async () => {
 // ---------- Enter app ----------
 function enterApp(user) {
   state.me = user;
+  state.baseTitle = document.title;
   $("#auth-screen").classList.add("hidden");
   $("#app").classList.remove("hidden");
   renderMe();
   refreshAll();
+  requestNotifyPermission();
+  // Poll for new messages / unread across all conversations.
+  setInterval(loadConversations, 5000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) loadConversations(); });
+  window.addEventListener("focus", loadConversations);
+}
+
+function requestNotifyPermission() {
+  try {
+    if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+  } catch {}
+}
+
+function updateTitle(total) {
+  document.title = (total > 0 ? `(${total}) ` : "") + state.baseTitle;
+}
+
+function fireNotification(c) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  const lm = c.lastMessage;
+  if (!lm) return;
+  const title = c.type === "group" ? c.title : lm.senderName || c.title;
+  const body = c.type === "group" ? `${lm.senderName}: ${lm.body}` : lm.body;
+  try {
+    const n = new Notification(title, { body: String(body).slice(0, 140), tag: c.id, renotify: true });
+    n.onclick = () => { window.focus(); openConversation(c); n.close(); };
+  } catch {}
+}
+
+function processUnread(conversations) {
+  let total = 0;
+  for (const c of conversations) {
+    const isActive = state.activeConv && state.activeConv.id === c.id;
+    if (!isActive) total += c.unread || 0;
+    const lastAt = c.lastMessage ? c.lastMessage.createdAt : 0;
+    const prev = state.notifiedAt[c.id] || 0;
+    if (state.notifyInit && lastAt > prev && (c.unread || 0) > 0 && (!isActive || document.hidden)) {
+      fireNotification(c);
+    }
+    if (lastAt > prev) state.notifiedAt[c.id] = lastAt;
+  }
+  state.notifyInit = true;
+  updateTitle(total);
 }
 function renderMe() {
   $("#me-name").textContent = state.me.displayName;
@@ -194,19 +241,26 @@ async function loadFriends() {
 async function loadConversations() {
   let conversations = [];
   try { ({ conversations } = await api("/api/conversations")); } catch { return; }
+  processUnread(conversations);
   const list = $("#conversation-list");
   list.innerHTML = "";
   if (!conversations.length) { list.innerHTML = '<li class="empty-hint">No chats yet.</li>'; return; }
   for (const c of conversations) {
     const li = document.createElement("li");
     li.className = "row-item";
-    if (state.activeConv && state.activeConv.id === c.id) li.classList.add("active");
+    const isActive = state.activeConv && state.activeConv.id === c.id;
+    if (isActive) li.classList.add("active");
     const icon = c.type === "group" ? '<span class="avatar sm group">👥</span>' : avatarHtml(c.other || { displayName: c.title }, "sm");
     const preview = c.lastMessage ? escapeHtml(c.lastMessage.body.slice(0, 38)) : (c.type === "group" ? "New group" : "Say hello 👋");
-    li.innerHTML = `${icon}<div class="row-main"><div class="row-name">${escapeHtml(c.title)}</div><div class="row-sub">${preview}</div></div>`;
+    const unread = !isActive && c.unread > 0 ? `<span class="badge">${c.unread > 99 ? "99+" : c.unread}</span>` : "";
+    li.innerHTML = `${icon}<div class="row-main"><div class="row-name">${escapeHtml(c.title)}</div><div class="row-sub">${preview}</div></div>${unread}`;
     li.onclick = () => openConversation(c);
     list.appendChild(li);
   }
+}
+
+async function markRead(convId) {
+  try { await api("/api/conversations/read", { method: "POST", body: JSON.stringify({ conversationId: convId }) }); } catch {}
 }
 
 async function startDm(friend) {
@@ -243,6 +297,9 @@ async function openConversation(conv) {
   scrollBottom();
   connectWs(conv.id);
   document.querySelectorAll("#conversation-list .row-item").forEach((el) => el.classList.remove("active"));
+  await markRead(conv.id);
+  state.notifiedAt[conv.id] = Date.now();
+  loadConversations();
 }
 
 function connectWs(convId) {
@@ -256,6 +313,7 @@ function connectWs(convId) {
       if (data.type === "message" && state.activeConv && data.message.conversationId === state.activeConv.id) {
         renderMessage(data.message);
         scrollBottom();
+        if (!document.hidden) { markRead(state.activeConv.id); state.notifiedAt[state.activeConv.id] = data.message.createdAt; }
         loadConversations();
       }
     } catch {}
