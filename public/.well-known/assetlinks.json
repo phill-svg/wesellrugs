@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "au.com.wesellrugs.twa",
+      "sha256_cert_fingerprints": [
+        "F6:90:56:E5:83:38:75:A4:AD:9D:13:F4:DE:5B:F9:8F:1B:9B:BA:3E:52:11:19:AA:BF:05:EA:71:67:2C:30:3A"
+      ]
+    }
+  }
+]
