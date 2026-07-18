@@ -2,7 +2,7 @@
   "name": "wesellrugs-messenger",
   "version": "0.1.0",
   "private": true,
-  "description": "Real-time messenger app on Cloudflare Workers, Durable Objects and D1",
+  "description": "Real-time messenger app ",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
