@@ -63,6 +63,30 @@ function paintAvatar(el, u) {
     el.textContent = initials(u.displayName);
   }
 }
+// Avatar for a conversation row (group photo/icon, or the other person).
+function convAvatarHtml(c, cls = "") {
+  if (c.type === "group") {
+    if (c.avatarUrl) return `<span class="avatar pic ${cls}"><img src="${escapeAttr(c.avatarUrl)}" alt=""></span>`;
+    return `<span class="avatar group ${cls}">👥</span>`;
+  }
+  return avatarHtml(c.other || { displayName: c.title }, cls);
+}
+function paintConvAvatar(el, conv) {
+  el.classList.remove("group", "pic");
+  if (conv.type === "group") {
+    if (conv.avatarUrl) {
+      el.classList.add("pic");
+      el.style.background = "transparent";
+      el.innerHTML = `<img src="${escapeAttr(conv.avatarUrl)}" alt="">`;
+    } else {
+      el.classList.add("group");
+      el.style.background = "";
+      el.textContent = "👥";
+    }
+  } else {
+    paintAvatar(el, conv.other || { displayName: conv.title });
+  }
+}
 
 // ---------- Auth UI ----------
 function showAuthError(msg) { $("#auth-error").textContent = msg || ""; }
@@ -261,7 +285,7 @@ async function loadConversations() {
     li.className = "row-item";
     const isActive = state.activeConv && state.activeConv.id === c.id;
     if (isActive) li.classList.add("active");
-    const icon = c.type === "group" ? '<span class="avatar sm group">👥</span>' : avatarHtml(c.other || { displayName: c.title }, "sm");
+    const icon = convAvatarHtml(c, "sm");
     const preview = c.lastMessage ? escapeHtml(c.lastMessage.body.slice(0, 38)) : (c.type === "group" ? "New group" : "Say hello 👋");
     const unread = !isActive && c.unread > 0 ? `<span class="badge">${c.unread > 99 ? "99+" : c.unread}</span>` : "";
     li.innerHTML = `${icon}<div class="row-main"><div class="row-name">${escapeHtml(c.title)}</div><div class="row-sub">${preview}</div></div>${unread}`;
@@ -292,14 +316,12 @@ async function openConversation(conv) {
   $("#app").classList.add("viewing-chat");
   $("#peer-name").textContent = conv.title;
   const peerAvatar = $("#peer-avatar");
+  paintConvAvatar(peerAvatar, conv);
   if (conv.type === "group") {
-    peerAvatar.textContent = "👥";
-    peerAvatar.style.background = "";
-    peerAvatar.classList.add("group");
     const names = (conv.members || []).map((m) => m.displayName);
-    $("#peer-status").textContent = `${(conv.members || []).length + 1} members · You, ${names.join(", ")}`;
+    $("#peer-status").textContent = `${(conv.members || []).length + 1} members · Tap to edit`;
+    $("#peer-status").title = "You, " + names.join(", ");
   } else {
-    paintAvatar(peerAvatar, conv.other || { displayName: conv.title });
     $("#peer-status").textContent = conv.other ? "@" + conv.other.username : "";
   }
   $("#messages").innerHTML = "";
@@ -401,7 +423,9 @@ $("#composer").addEventListener("submit", (e) => {
 
 // ---------- View a profile ----------
 $("#chat-header").addEventListener("click", () => {
-  if (state.activeConv && state.activeConv.type === "dm" && state.activeConv.other) openProfile(state.activeConv.other.id);
+  if (!state.activeConv) return;
+  if (state.activeConv.type === "group") openGroupInfo(state.activeConv);
+  else if (state.activeConv.other) openProfile(state.activeConv.other.id);
 });
 $("#profile-close").addEventListener("click", () => $("#profile-modal").classList.add("hidden"));
 $("#profile-modal").addEventListener("click", (e) => { if (e.target.id === "profile-modal") $("#profile-modal").classList.add("hidden"); });
@@ -426,6 +450,90 @@ async function openProfile(userId) {
   $("#search-results").classList.add("hidden");
   $("#profile-modal").classList.remove("hidden");
 }
+
+// ---------- Group info / edit ----------
+$("#ginfo-close").addEventListener("click", () => $("#groupinfo-modal").classList.add("hidden"));
+$("#groupinfo-modal").addEventListener("click", (e) => { if (e.target.id === "groupinfo-modal") $("#groupinfo-modal").classList.add("hidden"); });
+
+function openGroupInfo(conv) {
+  state.groupEdit = conv;
+  $("#ginfo-name").value = conv.title || "";
+  $("#ginfo-desc").value = conv.description || "";
+  $("#ginfo-error").textContent = "";
+  $("#ginfo-photo-msg").textContent = "";
+  $("#ginfo-file").value = "";
+  paintConvAvatar($("#ginfo-avatar"), conv);
+  $("#ginfo-remove-btn").classList.toggle("hidden", !conv.avatarUrl);
+  const list = $("#ginfo-members");
+  list.innerHTML = "";
+  const you = document.createElement("li");
+  you.className = "picker-item";
+  you.innerHTML = `<label>${avatarHtml(state.me, "sm")} ${escapeHtml(state.me.displayName)} <span class="row-sub">(you)</span></label>`;
+  list.appendChild(you);
+  for (const m of conv.members || []) {
+    const li = document.createElement("li");
+    li.className = "picker-item";
+    li.innerHTML = `<label>${avatarHtml(m, "sm")} ${escapeHtml(m.displayName)}</label>`;
+    list.appendChild(li);
+  }
+  $("#groupinfo-modal").classList.remove("hidden");
+}
+
+$("#ginfo-save").addEventListener("click", async () => {
+  const conv = state.groupEdit;
+  if (!conv) return;
+  $("#ginfo-error").textContent = "";
+  try {
+    const { name, description } = await api("/api/group", {
+      method: "PATCH",
+      body: JSON.stringify({ conversationId: conv.id, name: $("#ginfo-name").value.trim(), description: $("#ginfo-desc").value }),
+    });
+    conv.title = name;
+    conv.description = description;
+    if (state.activeConv && state.activeConv.id === conv.id) $("#peer-name").textContent = name;
+    $("#groupinfo-modal").classList.add("hidden");
+    loadConversations();
+  } catch (err) { $("#ginfo-error").textContent = err.message; }
+});
+
+$("#ginfo-upload-btn").addEventListener("click", () => $("#ginfo-file").click());
+$("#ginfo-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  const conv = state.groupEdit;
+  if (!file || !conv) return;
+  const msg = $("#ginfo-photo-msg");
+  msg.className = "modal-msg";
+  msg.textContent = "Uploading…";
+  try {
+    const blob = await resizeImage(file, 256);
+    const res = await fetch("/api/group/avatar?conversation=" + encodeURIComponent(conv.id), { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Upload failed.");
+    conv.avatarUrl = data.avatarUrl;
+    paintConvAvatar($("#ginfo-avatar"), conv);
+    if (state.activeConv && state.activeConv.id === conv.id) paintConvAvatar($("#peer-avatar"), conv);
+    $("#ginfo-remove-btn").classList.remove("hidden");
+    msg.textContent = "Photo updated ✓";
+    msg.classList.add("ok");
+    loadConversations();
+  } catch (err) { msg.textContent = err.message; msg.classList.add("err"); }
+});
+$("#ginfo-remove-btn").addEventListener("click", async () => {
+  const conv = state.groupEdit;
+  if (!conv) return;
+  const msg = $("#ginfo-photo-msg");
+  msg.className = "modal-msg";
+  try {
+    await api("/api/group/avatar?conversation=" + encodeURIComponent(conv.id), { method: "DELETE" });
+    conv.avatarUrl = "";
+    paintConvAvatar($("#ginfo-avatar"), conv);
+    if (state.activeConv && state.activeConv.id === conv.id) paintConvAvatar($("#peer-avatar"), conv);
+    $("#ginfo-remove-btn").classList.add("hidden");
+    msg.textContent = "Photo removed.";
+    msg.classList.add("ok");
+    loadConversations();
+  } catch (err) { msg.textContent = err.message; msg.classList.add("err"); }
+});
 
 // ---------- Edit my profile (settings) ----------
 $("#me-profile-btn").addEventListener("click", openSettings);

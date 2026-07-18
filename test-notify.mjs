@@ -1,7 +1,7 @@
 // Tests unread counts + mark-as-read (the data behind notifications).
 const BASE = process.env.BASE || "http://localhost:8788";
 const WS_BASE = BASE.replace(/^http/, "ws");
-const s = Date.now().toString(36);
+const s = process.env.SUFFIX || Date.now().toString(36);
 function cookieFrom(res) { return (res.headers.get("set-cookie") || "").split(";")[0]; }
 async function register(name) {
   const u = { username: name.toLowerCase() + s.slice(-6), displayName: name, password: "secret123" };

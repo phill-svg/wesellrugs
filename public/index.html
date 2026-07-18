@@ -158,6 +158,34 @@
     </div>
   </div>
 
+  <!-- GROUP INFO / EDIT MODAL -->
+  <div id="groupinfo-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="profile-hero">
+        <span class="avatar xl" id="ginfo-avatar"></span>
+        <div class="avatar-actions">
+          <button id="ginfo-upload-btn" class="btn-ghost-sm" type="button">Change photo</button>
+          <button id="ginfo-remove-btn" class="btn-ghost-sm hidden" type="button">Remove</button>
+        </div>
+        <input id="ginfo-file" type="file" accept="image/*" class="hidden" />
+        <p id="ginfo-photo-msg" class="modal-msg"></p>
+      </div>
+      <label class="modal-label">Group name
+        <input id="ginfo-name" class="modal-input" maxlength="60" />
+      </label>
+      <label class="modal-label">Description
+        <textarea id="ginfo-desc" class="modal-input" rows="3" maxlength="300" placeholder="What's this group about?"></textarea>
+      </label>
+      <div class="modal-label">Members</div>
+      <ul id="ginfo-members" class="picker-list"></ul>
+      <p id="ginfo-error" class="modal-error"></p>
+      <div class="modal-actions">
+        <button id="ginfo-close" class="btn-ghost-sm" type="button">Close</button>
+        <button id="ginfo-save" class="btn-primary-sm" type="button">Save changes</button>
+      </div>
+    </div>
+  </div>
+
   <!-- NEW GROUP MODAL -->
   <div id="group-modal" class="modal-overlay hidden">
     <div class="modal">

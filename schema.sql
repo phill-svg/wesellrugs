@@ -21,11 +21,13 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
 CREATE TABLE IF NOT EXISTS conversations (
-  id         TEXT PRIMARY KEY,
-  type       TEXT NOT NULL DEFAULT 'dm',   -- 'dm' | 'group'
-  name       TEXT,                          -- group name (null for DMs)
-  created_by TEXT,                          -- creator user id (groups)
-  created_at INTEGER NOT NULL
+  id          TEXT PRIMARY KEY,
+  type        TEXT NOT NULL DEFAULT 'dm',   -- 'dm' | 'group'
+  name        TEXT,                          -- group name (null for DMs)
+  description TEXT,                          -- group description (groups)
+  avatar_url  TEXT,                          -- group photo (groups)
+  created_by  TEXT,                          -- creator user id (groups)
+  created_at  INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS friendships (

@@ -75,7 +75,8 @@ export default {
     const { pathname } = url;
     try {
       if (pathname === "/ws") return handleWs(request, env, url);
-      if (pathname.startsWith("/api/avatar/") && request.method === "GET") return serveAvatar(request, env, pathname);
+      if (pathname.startsWith("/api/avatar/") && request.method === "GET") return serveAvatar(request, env, pathname, "avatars/");
+      if (pathname.startsWith("/api/group-avatar/") && request.method === "GET") return serveAvatar(request, env, pathname, "groups/");
       if (pathname.startsWith("/api/")) return handleApi(request, env, url);
     } catch (err) {
       return json({ error: "Server error", detail: String((err && err.message) || err) }, { status: 500 });
@@ -110,7 +111,7 @@ async function handleApi(request, env, url) {
       .run();
     const token = await createSession(db, id);
     return json(
-      { user: { id, username: u, displayName: name, bio: "", avatarColor: color } },
+      { user: { id, username: u, displayName: name, bio: "", avatarColor: color, avatarUrl: "" } },
       { headers: { "Set-Cookie": sessionCookie(token) } }
     );
   }
@@ -126,7 +127,16 @@ async function handleApi(request, env, url) {
       return json({ error: "Invalid username or password." }, { status: 401 });
     const token = await createSession(db, row.id);
     return json(
-      { user: { id: row.id, username: row.username, displayName: row.display_name } },
+      {
+        user: {
+          id: row.id,
+          username: row.username,
+          displayName: row.display_name,
+          bio: row.bio || "",
+          avatarColor: row.avatar_color || "",
+          avatarUrl: row.avatar_url || "",
+        },
+      },
       { headers: { "Set-Cookie": sessionCookie(token) } }
     );
   }
@@ -353,11 +363,51 @@ async function handleApi(request, env, url) {
     return json({ conversationId: convId });
   }
 
+  // ---- Edit a group's name / description (members only) ----
+  if (pathname === "/api/group" && (method === "PATCH" || method === "PUT")) {
+    const { conversationId, name, description } = await request.json().catch(() => ({}));
+    const grp = await db.prepare("SELECT type FROM conversations WHERE id = ?").bind(conversationId).first();
+    if (!grp || grp.type !== "group") return json({ error: "Group not found." }, { status: 404 });
+    if (!(await isParticipant(db, conversationId, me.id)))
+      return json({ error: "You're not in this group." }, { status: 403 });
+    const newName = (name || "").trim().slice(0, 60);
+    if (!newName) return json({ error: "Group name can't be empty." }, { status: 400 });
+    const newDesc = (description || "").toString().slice(0, 300);
+    await db.prepare("UPDATE conversations SET name = ?, description = ? WHERE id = ?").bind(newName, newDesc, conversationId).run();
+    return json({ name: newName, description: newDesc });
+  }
+
+  // ---- Upload / remove a group's photo (members only) ----
+  if (pathname === "/api/group/avatar" && (method === "POST" || method === "DELETE")) {
+    const conversationId = url.searchParams.get("conversation");
+    const grp = await db.prepare("SELECT type FROM conversations WHERE id = ?").bind(conversationId).first();
+    if (!grp || grp.type !== "group") return json({ error: "Group not found." }, { status: 404 });
+    if (!(await isParticipant(db, conversationId, me.id)))
+      return json({ error: "You're not in this group." }, { status: 403 });
+
+    if (method === "DELETE") {
+      await env.AVATARS.delete("groups/" + conversationId);
+      await db.prepare("UPDATE conversations SET avatar_url = NULL WHERE id = ?").bind(conversationId).run();
+      return json({ ok: true });
+    }
+    const contentType = request.headers.get("Content-Type") || "";
+    const allowed = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+    if (!allowed.includes(contentType.split(";")[0].trim()))
+      return json({ error: "Please upload a JPEG, PNG, WebP or GIF image." }, { status: 400 });
+    const buf = await request.arrayBuffer();
+    if (buf.byteLength === 0) return json({ error: "Empty image." }, { status: 400 });
+    if (buf.byteLength > 3 * 1024 * 1024) return json({ error: "Image is too large (max 3 MB)." }, { status: 413 });
+    await env.AVATARS.put("groups/" + conversationId, buf, { httpMetadata: { contentType } });
+    const avatarUrl = `/api/group-avatar/${conversationId}?v=${Date.now()}`;
+    await db.prepare("UPDATE conversations SET avatar_url = ? WHERE id = ?").bind(avatarUrl, conversationId).run();
+    return json({ avatarUrl });
+  }
+
   // ---- My conversations (DMs + groups) ----
   if (pathname === "/api/conversations" && method === "GET") {
     const { results: convs } = await db
       .prepare(
-        `SELECT c.id, c.type, c.name, c.created_at, p.last_read_at,
+        `SELECT c.id, c.type, c.name, c.description, c.avatar_url, c.created_at, p.last_read_at,
                 (SELECT body FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_body,
                 (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_at,
                 (SELECT u.display_name FROM messages m JOIN users u ON u.id = m.sender_id
@@ -401,6 +451,8 @@ async function handleApi(request, env, url) {
         id: c.id,
         type: c.type,
         title: isGroup ? c.name : members[0]?.displayName || "Unknown",
+        description: c.description || "",
+        avatarUrl: isGroup ? c.avatar_url || "" : "",
         members,
         other: isGroup ? null : members[0] || null,
         unread: c.unread || 0,
@@ -449,10 +501,11 @@ async function handleApi(request, env, url) {
   return json({ error: "Not found." }, { status: 404 });
 }
 
-async function serveAvatar(request, env, pathname) {
-  const id = decodeURIComponent(pathname.slice("/api/avatar/".length));
+async function serveAvatar(request, env, pathname, r2prefix) {
+  const urlPrefix = r2prefix === "groups/" ? "/api/group-avatar/" : "/api/avatar/";
+  const id = decodeURIComponent(pathname.slice(urlPrefix.length));
   if (!id) return new Response("Not found", { status: 404 });
-  const obj = await env.AVATARS.get("avatars/" + id);
+  const obj = await env.AVATARS.get(r2prefix + id);
   if (!obj) return new Response("Not found", { status: 404 });
   const headers = new Headers();
   obj.writeHttpMetadata(headers);
