@@ -1,6 +1,7 @@
 // End-to-end test against the running dev server (http://localhost:8788).
 // Registers two users, opens a DM, and verifies live WebSocket delivery + persistence.
-const BASE = "http://localhost:8788";
+const BASE = process.env.BASE || "http://localhost:8788";
+const WS_BASE = BASE.replace(/^http/, "ws");
 const suffix = Date.now().toString(36);
 const A = { username: "testa_" + suffix, displayName: "Test A", password: "secret123" };
 const B = { username: "testb_" + suffix, displayName: "Test B", password: "secret123" };
@@ -33,7 +34,7 @@ async function api(path, cookie, opts = {}) {
 }
 
 function openWs(convId, cookie) {
-  const url = `ws://localhost:8788/ws?conversation=${encodeURIComponent(convId)}`;
+  const url = `${WS_BASE}/ws?conversation=${encodeURIComponent(convId)}`;
   return new WebSocket(url, { headers: { Cookie: cookie } });
 }
 
