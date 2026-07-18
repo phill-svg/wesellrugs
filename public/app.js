@@ -113,10 +113,11 @@ function enterApp(user) {
   renderMe();
   refreshAll();
   requestNotifyPermission();
-  // Poll for new messages / unread across all conversations.
-  setInterval(loadConversations, 5000);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) loadConversations(); });
-  window.addEventListener("focus", loadConversations);
+  // Poll for new messages / unread across all conversations, and backfill the open chat.
+  const tick = () => { loadConversations(); refreshActiveMessages(); };
+  setInterval(tick, 4000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
+  window.addEventListener("focus", tick);
 }
 
 function requestNotifyPermission() {
@@ -313,11 +314,16 @@ async function openConversation(conv) {
 }
 
 function connectWs(convId) {
-  if (state.ws) { state.ws.close(); state.ws = null; }
+  // Drop any previous socket (null it first so its close handler no-ops).
+  if (state.ws) { const old = state.ws; state.ws = null; try { old.close(); } catch {} }
+  stopHeartbeat();
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/ws?conversation=${encodeURIComponent(convId)}`);
   state.ws = ws;
+
+  ws.addEventListener("open", startHeartbeat);
   ws.addEventListener("message", (ev) => {
+    if (ev.data === "pong") return;
     try {
       const data = JSON.parse(ev.data);
       if (data.type === "message" && state.activeConv && data.message.conversationId === state.activeConv.id) {
@@ -328,6 +334,47 @@ function connectWs(convId) {
       }
     } catch {}
   });
+
+  const onDown = () => {
+    stopHeartbeat();
+    if (state.ws !== ws) return; // a newer socket has already replaced this one
+    state.ws = null;
+    // Reconnect if we're still on this conversation, and backfill anything missed.
+    if (state.activeConv && state.activeConv.id === convId) {
+      setTimeout(() => {
+        if (state.activeConv && state.activeConv.id === convId && !state.ws) {
+          refreshActiveMessages();
+          connectWs(convId);
+        }
+      }, 1500);
+    }
+  };
+  ws.addEventListener("close", onDown);
+  ws.addEventListener("error", onDown);
+}
+
+function startHeartbeat() {
+  stopHeartbeat();
+  state.hb = setInterval(() => {
+    try { if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send("ping"); } catch {}
+  }, 25000);
+}
+function stopHeartbeat() { if (state.hb) { clearInterval(state.hb); state.hb = null; } }
+
+// Backstop: re-fetch the open conversation's messages and render anything new.
+async function refreshActiveMessages() {
+  if (!state.activeConv) return;
+  const convId = state.activeConv.id;
+  try {
+    const { messages } = await api("/api/messages?conversation=" + encodeURIComponent(convId));
+    if (!state.activeConv || state.activeConv.id !== convId) return;
+    let added = false;
+    for (const m of messages) { if (!state.renderedIds.has(m.id)) { renderMessage(m); added = true; } }
+    if (added) {
+      scrollBottom();
+      if (!document.hidden) markRead(convId);
+    }
+  } catch {}
 }
 
 function renderMessage(m) {

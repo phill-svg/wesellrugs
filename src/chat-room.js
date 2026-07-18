@@ -1,5 +1,6 @@
 // ChatRoom Durable Object — one instance per conversation.
-// Holds live WebSocket connections, persists messages to D1, and broadcasts.
+// Uses the WebSocket Hibernation API so connections survive DO hibernation
+// (they don't silently drop, and the DO can be evicted without losing sockets).
 
 import { randomId } from "./auth.js";
 
@@ -7,61 +8,56 @@ export class ChatRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.sessions = new Set(); // { ws, userId, displayName }
+    // Platform answers "ping" with "pong" without waking the DO — keeps
+    // connections alive through proxies for free.
+    try {
+      this.state.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+    } catch {}
   }
 
   async fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname.endsWith("/ws")) {
-      if (request.headers.get("Upgrade") !== "websocket") {
-        return new Response("Expected WebSocket", { status: 426 });
-      }
-      const conversationId = url.searchParams.get("conversation");
-      const userId = url.searchParams.get("userId");
-      const displayName = url.searchParams.get("displayName") || "Someone";
+    if (!url.pathname.endsWith("/ws")) return new Response("Not found", { status: 404 });
+    if (request.headers.get("Upgrade") !== "websocket") return new Response("Expected WebSocket", { status: 426 });
 
-      const pair = new WebSocketPair();
-      const [client, server] = Object.values(pair);
-      this.accept(server, { conversationId, userId, displayName });
-      return new Response(null, { status: 101, webSocket: client });
-    }
-    return new Response("Not found", { status: 404 });
-  }
-
-  accept(ws, meta) {
-    ws.accept();
-    const session = { ws, userId: meta.userId, displayName: meta.displayName, conversationId: meta.conversationId };
-    this.sessions.add(session);
-
-    ws.addEventListener("message", async (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === "message" && typeof data.body === "string") {
-          const body = data.body.trim().slice(0, 4000);
-          if (!body) return;
-          await this.persistAndBroadcast(session, body);
-        }
-      } catch {
-        // ignore malformed frames
-      }
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    // Accept with hibernation; stash this socket's identity on the socket itself.
+    this.state.acceptWebSocket(server);
+    server.serializeAttachment({
+      conversationId: url.searchParams.get("conversation"),
+      userId: url.searchParams.get("userId"),
+      displayName: url.searchParams.get("displayName") || "Someone",
     });
-
-    const close = () => this.sessions.delete(session);
-    ws.addEventListener("close", close);
-    ws.addEventListener("error", close);
+    return new Response(null, { status: 101, webSocket: client });
   }
 
-  async persistAndBroadcast(session, body) {
+  async webSocketMessage(ws, message) {
+    if (message === "ping") return; // handled by auto-response, but just in case
+    let data;
+    try { data = JSON.parse(message); } catch { return; }
+    if (data.type === "message" && typeof data.body === "string") {
+      const body = data.body.trim().slice(0, 4000);
+      if (!body) return;
+      const meta = ws.deserializeAttachment() || {};
+      await this.persistAndBroadcast(meta, body);
+    }
+  }
+
+  async webSocketClose(ws, code) {
+    try { ws.close(code || 1000, "closed"); } catch {}
+  }
+  async webSocketError() {}
+
+  async persistAndBroadcast(meta, body) {
     const message = {
       id: randomId(12),
-      conversationId: session.conversationId,
-      senderId: session.userId,
-      senderName: session.displayName,
+      conversationId: meta.conversationId,
+      senderId: meta.userId,
+      senderName: meta.displayName,
       body,
       createdAt: Date.now(),
     };
-
-    // Persist to D1
     await this.env.DB.prepare(
       "INSERT INTO messages (id, conversation_id, sender_id, body, created_at) VALUES (?, ?, ?, ?, ?)"
     )
@@ -69,12 +65,8 @@ export class ChatRoom {
       .run();
 
     const payload = JSON.stringify({ type: "message", message });
-    for (const s of this.sessions) {
-      try {
-        s.ws.send(payload);
-      } catch {
-        this.sessions.delete(s);
-      }
+    for (const socket of this.state.getWebSockets()) {
+      try { socket.send(payload); } catch {}
     }
   }
 }
