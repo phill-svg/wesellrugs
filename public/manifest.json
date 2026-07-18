@@ -1,10 +1,15 @@
 {
+  "id": "/",
   "name": "We Sell Rugs Messenger",
   "short_name": "We Sell Rugs",
   "description": "A fast, private messenger.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "orientation": "portrait",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["social", "communication"],
   "background_color": "#0f1115",
   "theme_color": "#0f1115",
   "icons": [
