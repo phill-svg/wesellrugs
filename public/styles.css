@@ -1,11 +1,11 @@
 :root {
-  --bg: #01040a;
-  --panel: #dcd2dc;
-  --panel-2: #dadcdf;
+  --bg: #c0c4cc;
+  --panel: #9e739e;
+  --panel-2: #cab7c3;
   --line: #010818;
   --text: #020703;
   --text-soft: #00050d;
-  --accent: #980909;
+  --accent: #dbcbcb;
   --accent-2: #600467;
   --bubble-me: #0a9700;
   --bubble-them: #820000;
@@ -24,7 +24,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 .hidden { display: none !important; }
-.logo { color: var(--accent); }
+.logo { color: var(--ok); }
 .logo.big { font-size: 3rem; display: block; margin-bottom: .5rem; }
 
 /* ---- AUTH ---- */
