@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   bio           TEXT,
   avatar_color  TEXT,
   avatar_url    TEXT,
+  last_seen     INTEGER,
   created_at    INTEGER NOT NULL
 );
 
@@ -53,6 +54,7 @@ CREATE TABLE IF NOT EXISTS messages (
   conversation_id TEXT NOT NULL,
   sender_id       TEXT NOT NULL,
   body            TEXT NOT NULL,
+  image_url       TEXT,
   created_at      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);

@@ -11,6 +11,8 @@ const state = {
   notifiedAt: {}, // conversationId -> last message time we've handled
   notifyInit: false,
   baseTitle: "We Sell Rugs",
+  typers: {},      // userId -> { name, ts }
+  typerTimers: {},
 };
 
 const AVATAR_COLORS = ["#2f80ed", "#0ea5a4", "#10b981", "#f59e0b", "#f97316", "#ef4444", "#6366f1", "#64748b"];
@@ -46,21 +48,22 @@ function colorFor(u) {
   return (u && u.avatarColor) || AVATAR_COLORS[hashStr((u && (u.username || u.displayName)) || "?") % AVATAR_COLORS.length];
 }
 function escapeAttr(s) { return String(s).replace(/"/g, "&quot;"); }
+function dotHtml(u) { return u && u.online ? '<span class="presence-dot" title="Online"></span>' : ""; }
 function avatarHtml(u, cls = "") {
   if (u && u.avatarUrl)
-    return `<span class="avatar pic ${cls}"><img src="${escapeAttr(u.avatarUrl)}" alt="" loading="lazy"></span>`;
-  return `<span class="avatar ${cls}" style="background:${colorFor(u)}">${initials(u.displayName)}</span>`;
+    return `<span class="avatar pic ${cls}"><img src="${escapeAttr(u.avatarUrl)}" alt="" loading="lazy">${dotHtml(u)}</span>`;
+  return `<span class="avatar ${cls}" style="background:${colorFor(u)}">${initials(u.displayName)}${dotHtml(u)}</span>`;
 }
 function paintAvatar(el, u) {
   el.classList.remove("group");
   if (u && u.avatarUrl) {
     el.classList.add("pic");
     el.style.background = "transparent";
-    el.innerHTML = `<img src="${escapeAttr(u.avatarUrl)}" alt="">`;
+    el.innerHTML = `<img src="${escapeAttr(u.avatarUrl)}" alt="">${dotHtml(u)}`;
   } else {
     el.classList.remove("pic");
     el.style.background = colorFor(u);
-    el.textContent = initials(u.displayName);
+    el.innerHTML = `${escapeHtml(initials(u.displayName))}${dotHtml(u)}`;
   }
 }
 // Avatar for a conversation row (group photo/icon, or the other person).
@@ -137,12 +140,16 @@ function enterApp(user) {
   renderMe();
   refreshAll();
   requestNotifyPermission();
+  pingPresence();
+  setInterval(pingPresence, 30000);
   // Poll for new messages / unread across all conversations, and backfill the open chat.
   const tick = () => { loadConversations(); refreshActiveMessages(); };
   setInterval(tick, 4000);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
-  window.addEventListener("focus", tick);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { pingPresence(); tick(); } });
+  window.addEventListener("focus", () => { pingPresence(); tick(); });
 }
+
+function pingPresence() { api("/api/presence", { method: "POST" }).catch(() => {}); }
 
 function requestNotifyPermission() {
   try {
@@ -259,14 +266,19 @@ async function loadRequests() {
 async function loadFriends() {
   let friends = [];
   try { ({ friends } = await api("/api/friends")); } catch { return; }
+  friends.sort((a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0) || a.displayName.localeCompare(b.displayName));
   state.friends = friends;
+  const onlineCount = friends.filter((f) => f.online).length;
+  const title = $("#friends-title");
+  if (title) title.textContent = onlineCount ? `Friends · ${onlineCount} online` : "Friends";
   const list = $("#friends-list");
   list.innerHTML = "";
   if (!friends.length) { list.innerHTML = '<li class="empty-hint">No friends yet — search above to add some.</li>'; return; }
   for (const u of friends) {
     const li = document.createElement("li");
     li.className = "row-item";
-    li.innerHTML = avatarHtml(u, "sm") + `<div class="row-main"><div class="row-name">${escapeHtml(u.displayName)}</div><div class="row-sub">@${escapeHtml(u.username)}</div></div>`;
+    const sub = u.online ? '<span class="online-text">Online</span>' : "@" + escapeHtml(u.username);
+    li.innerHTML = avatarHtml(u, "sm") + `<div class="row-main"><div class="row-name">${escapeHtml(u.displayName)}</div><div class="row-sub">${sub}</div></div>`;
     li.onclick = () => startDm(u);
     list.appendChild(li);
   }
@@ -277,6 +289,7 @@ async function loadConversations() {
   let conversations = [];
   try { ({ conversations } = await api("/api/conversations")); } catch { return; }
   processUnread(conversations);
+  updateActivePresence(conversations);
   const list = $("#conversation-list");
   list.innerHTML = "";
   if (!conversations.length) { list.innerHTML = '<li class="empty-hint">No chats yet.</li>'; return; }
@@ -286,7 +299,8 @@ async function loadConversations() {
     const isActive = state.activeConv && state.activeConv.id === c.id;
     if (isActive) li.classList.add("active");
     const icon = convAvatarHtml(c, "sm");
-    const preview = c.lastMessage ? escapeHtml(c.lastMessage.body.slice(0, 38)) : (c.type === "group" ? "New group" : "Say hello 👋");
+    const lm = c.lastMessage;
+    const preview = lm ? (lm.body ? escapeHtml(lm.body.slice(0, 38)) : (lm.imageUrl ? "📷 Photo" : "")) : (c.type === "group" ? "New group" : "Say hello 👋");
     const unread = !isActive && c.unread > 0 ? `<span class="badge">${c.unread > 99 ? "99+" : c.unread}</span>` : "";
     li.innerHTML = `${icon}<div class="row-main"><div class="row-name">${escapeHtml(c.title)}</div><div class="row-sub">${preview}</div></div>${unread}`;
     li.onclick = () => openConversation(c);
@@ -311,6 +325,9 @@ async function startDm(friend) {
 async function openConversation(conv) {
   state.activeConv = conv;
   state.renderedIds = new Set();
+  state.typers = {};
+  state.typerTimers = {};
+  renderTyping();
   $("#chat-empty").classList.add("hidden");
   $("#chat-active").classList.remove("hidden");
   $("#app").classList.add("viewing-chat");
@@ -322,7 +339,7 @@ async function openConversation(conv) {
     $("#peer-status").textContent = `${(conv.members || []).length + 1} members · Tap to edit`;
     $("#peer-status").title = "You, " + names.join(", ");
   } else {
-    $("#peer-status").textContent = conv.other ? "@" + conv.other.username : "";
+    $("#peer-status").textContent = conv.other ? "@" + conv.other.username + (conv.other.online ? " · online" : "") : "";
   }
   $("#messages").innerHTML = "";
   const { messages } = await api("/api/messages?conversation=" + encodeURIComponent(conv.id));
@@ -348,6 +365,10 @@ function connectWs(convId) {
     if (ev.data === "pong") return;
     try {
       const data = JSON.parse(ev.data);
+      if (data.type === "typing" && state.activeConv && data.conversationId === state.activeConv.id) {
+        showTyping(data.userId, data.displayName);
+        return;
+      }
       if (data.type === "message" && state.activeConv && data.message.conversationId === state.activeConv.id) {
         renderMessage(data.message);
         scrollBottom();
@@ -404,11 +425,17 @@ function renderMessage(m) {
   state.renderedIds.add(m.id);
   const mine = m.senderId === state.me.id;
   const div = document.createElement("div");
-  div.className = "msg " + (mine ? "me" : "them");
+  div.className = "msg " + (mine ? "me" : "them") + (m.imageUrl ? " has-image" : "");
   const showName = !mine && state.activeConv && state.activeConv.type === "group";
   const nameLabel = showName ? `<span class="msg-sender">${escapeHtml(m.senderName)}</span>` : "";
-  div.innerHTML = `${nameLabel}<span class="body">${escapeHtml(m.body)}</span><span class="time">${fmtTime(m.createdAt)}</span>`;
+  const image = m.imageUrl
+    ? `<a href="${escapeAttr(m.imageUrl)}" target="_blank" rel="noopener" class="msg-image-link"><img class="msg-image" src="${escapeAttr(m.imageUrl)}" alt="photo" loading="lazy"></a>`
+    : "";
+  const body = m.body ? `<span class="body">${escapeHtml(m.body)}</span>` : "";
+  div.innerHTML = `${nameLabel}${image}${body}<span class="time">${fmtTime(m.createdAt)}</span>`;
   $("#messages").appendChild(div);
+  // Someone who just sent a message isn't typing anymore.
+  if (state.typers[m.senderId]) { delete state.typers[m.senderId]; renderTyping(); }
 }
 
 $("#composer").addEventListener("submit", (e) => {
@@ -419,6 +446,98 @@ $("#composer").addEventListener("submit", (e) => {
   state.ws.send(JSON.stringify({ type: "message", body }));
   input.value = "";
   input.focus();
+});
+
+// ---------- Typing indicator ----------
+let lastTypingSent = 0;
+$("#composer-input").addEventListener("input", () => {
+  const now = Date.now();
+  if (state.ws && state.ws.readyState === WebSocket.OPEN && now - lastTypingSent > 2000) {
+    lastTypingSent = now;
+    try { state.ws.send(JSON.stringify({ type: "typing" })); } catch {}
+  }
+});
+function showTyping(userId, name) {
+  if (userId === state.me.id) return;
+  state.typers[userId] = { name, ts: Date.now() };
+  renderTyping();
+  clearTimeout(state.typerTimers[userId]);
+  state.typerTimers[userId] = setTimeout(() => { delete state.typers[userId]; renderTyping(); }, 4000);
+}
+function renderTyping() {
+  const el = $("#typing-indicator");
+  if (!el) return;
+  const names = Object.values(state.typers).map((t) => t.name);
+  if (!names.length) { el.textContent = ""; el.classList.remove("show"); return; }
+  let text;
+  if (names.length === 1) text = `${names[0]} is typing…`;
+  else if (names.length === 2) text = `${names[0]} and ${names[1]} are typing…`;
+  else text = "Several people are typing…";
+  el.textContent = text;
+  el.classList.add("show");
+}
+
+// ---------- Live DM presence in the open header ----------
+function updateActivePresence(conversations) {
+  if (!state.activeConv || state.activeConv.type !== "dm") return;
+  const c = conversations.find((x) => x.id === state.activeConv.id);
+  if (!c || !c.other) return;
+  state.activeConv.other = c.other;
+  $("#peer-status").textContent = "@" + c.other.username + (c.other.online ? " · online" : "");
+  paintConvAvatar($("#peer-avatar"), state.activeConv);
+}
+
+// ---------- Mobile back button ----------
+$("#back-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  $("#app").classList.remove("viewing-chat");
+});
+
+// ---------- Send a photo ----------
+function resizeImageMax(file, maxDim = 1280) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      let w = img.width, h = img.height;
+      if (w > maxDim || h > maxDim) { const s = Math.min(maxDim / w, maxDim / h); w = Math.round(w * s); h = Math.round(h * s); }
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Couldn't process image."))), "image/jpeg", 0.85);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That doesn't look like a valid image.")); };
+    img.src = url;
+  });
+}
+$("#attach-btn").addEventListener("click", () => $("#attach-file").click());
+$("#attach-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file || !state.activeConv || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  const input = $("#composer-input");
+  const caption = input.value.trim();
+  const oldPh = input.placeholder;
+  input.placeholder = "Uploading photo…";
+  input.disabled = true;
+  try {
+    const blob = await resizeImageMax(file, 1280);
+    const res = await fetch("/api/messages/image?conversation=" + encodeURIComponent(state.activeConv.id), {
+      method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Upload failed.");
+    state.ws.send(JSON.stringify({ type: "message", body: caption, imageUrl: data.imageUrl }));
+    input.value = "";
+    input.placeholder = oldPh;
+  } catch (err) {
+    input.placeholder = err.message;
+    setTimeout(() => { input.placeholder = oldPh; }, 2500);
+  } finally {
+    input.disabled = false;
+    input.focus();
+  }
 });
 
 // ---------- View a profile ----------

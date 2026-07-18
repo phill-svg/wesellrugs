@@ -36,11 +36,31 @@ export class ChatRoom {
     if (message === "ping") return; // handled by auto-response, but just in case
     let data;
     try { data = JSON.parse(message); } catch { return; }
-    if (data.type === "message" && typeof data.body === "string") {
-      const body = data.body.trim().slice(0, 4000);
-      if (!body) return;
-      const meta = ws.deserializeAttachment() || {};
-      await this.persistAndBroadcast(meta, body);
+    const meta = ws.deserializeAttachment() || {};
+
+    if (data.type === "typing") {
+      this.broadcastExcept(ws, JSON.stringify({
+        type: "typing",
+        conversationId: meta.conversationId,
+        userId: meta.userId,
+        displayName: meta.displayName,
+      }));
+      return;
+    }
+
+    if (data.type === "message") {
+      const body = typeof data.body === "string" ? data.body.trim().slice(0, 4000) : "";
+      let imageUrl = typeof data.imageUrl === "string" ? data.imageUrl : "";
+      if (imageUrl && !imageUrl.startsWith("/api/message-image/")) imageUrl = ""; // only allow our own images
+      if (!body && !imageUrl) return;
+      await this.persistAndBroadcast(meta, body, imageUrl);
+    }
+  }
+
+  broadcastExcept(exceptWs, payload) {
+    for (const socket of this.state.getWebSockets()) {
+      if (socket === exceptWs) continue;
+      try { socket.send(payload); } catch {}
     }
   }
 
@@ -49,19 +69,20 @@ export class ChatRoom {
   }
   async webSocketError() {}
 
-  async persistAndBroadcast(meta, body) {
+  async persistAndBroadcast(meta, body, imageUrl) {
     const message = {
       id: randomId(12),
       conversationId: meta.conversationId,
       senderId: meta.userId,
       senderName: meta.displayName,
       body,
+      imageUrl: imageUrl || "",
       createdAt: Date.now(),
     };
     await this.env.DB.prepare(
-      "INSERT INTO messages (id, conversation_id, sender_id, body, created_at) VALUES (?, ?, ?, ?, ?)"
+      "INSERT INTO messages (id, conversation_id, sender_id, body, image_url, created_at) VALUES (?, ?, ?, ?, ?, ?)"
     )
-      .bind(message.id, message.conversationId, message.senderId, message.body, message.createdAt)
+      .bind(message.id, message.conversationId, message.senderId, message.body, message.imageUrl || null, message.createdAt)
       .run();
 
     const payload = JSON.stringify({ type: "message", message });

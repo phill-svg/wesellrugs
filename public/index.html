@@ -70,7 +70,7 @@
         <ul id="conversation-list" class="row-list"></ul>
 
         <!-- Friends -->
-        <div class="sidebar-section-title">Friends</div>
+        <div class="sidebar-section-title" id="friends-title">Friends</div>
         <ul id="friends-list" class="row-list"></ul>
       </div>
     </aside>
@@ -85,6 +85,7 @@
 
       <section id="chat-active" class="chat-active hidden">
         <header class="chat-header" id="chat-header" title="View profile">
+          <button type="button" id="back-btn" class="back-btn" aria-label="Back to chats">‹</button>
           <span class="avatar" id="peer-avatar"></span>
           <div>
             <div class="peer-name" id="peer-name"></div>
@@ -92,7 +93,10 @@
           </div>
         </header>
         <div id="messages" class="messages"></div>
+        <div id="typing-indicator" class="typing-indicator"></div>
         <form id="composer" class="composer">
+          <button type="button" id="attach-btn" class="btn-attach" title="Send a photo">🖼️</button>
+          <input id="attach-file" type="file" accept="image/*" class="hidden" />
           <input id="composer-input" autocomplete="off" placeholder="Type a message…" />
           <button type="submit" class="btn-send" title="Send">➤</button>
         </form>

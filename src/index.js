@@ -22,6 +22,10 @@ const json = (data, init = {}) =>
 const AVATAR_COLORS = ["#2f80ed", "#0ea5a4", "#10b981", "#f59e0b", "#f97316", "#ef4444", "#6366f1", "#64748b"];
 const pickColor = () => AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
 
+// A user counts as online if seen within the last minute.
+const ONLINE_WINDOW_MS = 60_000;
+const isOnline = (lastSeen) => !!lastSeen && Date.now() - lastSeen < ONLINE_WINDOW_MS;
+
 // Deterministic conversation id for a 1:1 DM between two user ids.
 function dmConversationId(a, b) {
   return "dm_" + [a, b].sort().join("_");
@@ -77,6 +81,7 @@ export default {
       if (pathname === "/ws") return handleWs(request, env, url);
       if (pathname.startsWith("/api/avatar/") && request.method === "GET") return serveAvatar(request, env, pathname, "avatars/");
       if (pathname.startsWith("/api/group-avatar/") && request.method === "GET") return serveAvatar(request, env, pathname, "groups/");
+      if (pathname.startsWith("/api/message-image/") && request.method === "GET") return serveAvatar(request, env, pathname, "messages/");
       if (pathname.startsWith("/api/")) return handleApi(request, env, url);
     } catch (err) {
       return json({ error: "Server error", detail: String((err && err.message) || err) }, { status: 500 });
@@ -153,6 +158,29 @@ async function handleApi(request, env, url) {
 
   if (pathname === "/api/me" && method === "GET") return json({ user: me });
 
+  // ---- Presence heartbeat ----
+  if (pathname === "/api/presence" && method === "POST") {
+    await db.prepare("UPDATE users SET last_seen = ? WHERE id = ?").bind(Date.now(), me.id).run();
+    return json({ ok: true });
+  }
+
+  // ---- Upload an image to send in a chat ----
+  if (pathname === "/api/messages/image" && method === "POST") {
+    const conversationId = url.searchParams.get("conversation");
+    if (!conversationId || !(await isParticipant(db, conversationId, me.id)))
+      return json({ error: "No access to this conversation." }, { status: 403 });
+    const contentType = request.headers.get("Content-Type") || "";
+    const allowed = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+    if (!allowed.includes(contentType.split(";")[0].trim()))
+      return json({ error: "Please choose a JPEG, PNG, WebP or GIF image." }, { status: 400 });
+    const buf = await request.arrayBuffer();
+    if (buf.byteLength === 0) return json({ error: "Empty image." }, { status: 400 });
+    if (buf.byteLength > 5 * 1024 * 1024) return json({ error: "Image is too large (max 5 MB)." }, { status: 413 });
+    const key = me.id + "_" + randomId(10);
+    await env.AVATARS.put("messages/" + key, buf, { httpMetadata: { contentType } });
+    return json({ imageUrl: `/api/message-image/${key}?v=${Date.now()}` });
+  }
+
   // ---- Update my profile (display name, bio, avatar colour) ----
   if (pathname === "/api/me" && (method === "PATCH" || method === "PUT")) {
     const { displayName, bio, avatarColor } = await request.json().catch(() => ({}));
@@ -208,10 +236,10 @@ async function handleApi(request, env, url) {
   // ---- View another user's public profile ----
   if (pathname === "/api/profile" && method === "GET") {
     const id = url.searchParams.get("id");
-    const row = await db.prepare("SELECT id, username, display_name, bio, avatar_color, avatar_url FROM users WHERE id = ?").bind(id).first();
+    const row = await db.prepare("SELECT id, username, display_name, bio, avatar_color, avatar_url, last_seen FROM users WHERE id = ?").bind(id).first();
     if (!row) return json({ error: "User not found." }, { status: 404 });
     return json({
-      user: { id: row.id, username: row.username, displayName: row.display_name, bio: row.bio || "", avatarColor: row.avatar_color || "", avatarUrl: row.avatar_url || "" },
+      user: { id: row.id, username: row.username, displayName: row.display_name, bio: row.bio || "", avatarColor: row.avatar_color || "", avatarUrl: row.avatar_url || "", online: isOnline(row.last_seen), lastSeen: row.last_seen || 0 },
       friendState: await friendState(db, me.id, row.id),
     });
   }
@@ -223,7 +251,7 @@ async function handleApi(request, env, url) {
     const like = "%" + q.replace(/[%_]/g, "") + "%";
     const { results } = await db
       .prepare(
-        `SELECT id, username, display_name, bio, avatar_color, avatar_url FROM users
+        `SELECT id, username, display_name, bio, avatar_color, avatar_url, last_seen FROM users
          WHERE id != ? AND (lower(username) LIKE ? OR lower(display_name) LIKE ?)
          ORDER BY display_name LIMIT 20`
       )
@@ -238,6 +266,8 @@ async function handleApi(request, env, url) {
         bio: r.bio || "",
         avatarColor: r.avatar_color || "",
         avatarUrl: r.avatar_url || "",
+        online: isOnline(r.last_seen),
+        lastSeen: r.last_seen || 0,
         friendState: await friendState(db, me.id, r.id),
       });
     }
@@ -292,7 +322,7 @@ async function handleApi(request, env, url) {
   if (pathname === "/api/friends" && method === "GET") {
     const { results } = await db
       .prepare(
-        `SELECT u.id, u.username, u.display_name, u.bio, u.avatar_color, u.avatar_url FROM friendships f
+        `SELECT u.id, u.username, u.display_name, u.bio, u.avatar_color, u.avatar_url, u.last_seen FROM friendships f
          JOIN users u ON u.id = CASE WHEN f.user_a = ?1 THEN f.user_b ELSE f.user_a END
          WHERE (f.user_a = ?1 OR f.user_b = ?1) AND f.status = 'accepted'
          ORDER BY u.display_name`
@@ -307,6 +337,8 @@ async function handleApi(request, env, url) {
         bio: r.bio || "",
         avatarColor: r.avatar_color || "",
         avatarUrl: r.avatar_url || "",
+        online: isOnline(r.last_seen),
+        lastSeen: r.last_seen || 0,
       })),
     });
   }
@@ -412,6 +444,7 @@ async function handleApi(request, env, url) {
                 (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_at,
                 (SELECT u.display_name FROM messages m JOIN users u ON u.id = m.sender_id
                    WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_sender,
+                (SELECT image_url FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_image,
                 (SELECT COUNT(*) FROM messages m
                    WHERE m.conversation_id = c.id AND m.created_at > p.last_read_at AND m.sender_id != ?1) AS unread
          FROM participants p JOIN conversations c ON c.id = p.conversation_id
@@ -426,7 +459,7 @@ async function handleApi(request, env, url) {
     // Gather participants for all these conversations in one query.
     const { results: parts } = await db
       .prepare(
-        `SELECT p.conversation_id, u.id, u.username, u.display_name, u.bio, u.avatar_color, u.avatar_url
+        `SELECT p.conversation_id, u.id, u.username, u.display_name, u.bio, u.avatar_color, u.avatar_url, u.last_seen
          FROM participants p JOIN users u ON u.id = p.user_id
          WHERE p.conversation_id IN (SELECT conversation_id FROM participants WHERE user_id = ?)`
       )
@@ -441,6 +474,8 @@ async function handleApi(request, env, url) {
         bio: r.bio || "",
         avatarColor: r.avatar_color || "",
         avatarUrl: r.avatar_url || "",
+        online: isOnline(r.last_seen),
+        lastSeen: r.last_seen || 0,
       });
     }
 
@@ -456,7 +491,9 @@ async function handleApi(request, env, url) {
         members,
         other: isGroup ? null : members[0] || null,
         unread: c.unread || 0,
-        lastMessage: c.last_body ? { body: c.last_body, createdAt: c.last_at, senderName: c.last_sender } : null,
+        lastMessage: c.last_at
+          ? { body: c.last_body || "", createdAt: c.last_at, senderName: c.last_sender, imageUrl: c.last_image || "" }
+          : null,
       };
     });
     return json({ conversations });
@@ -481,7 +518,7 @@ async function handleApi(request, env, url) {
       return json({ error: "No access to this conversation." }, { status: 403 });
     const { results } = await db
       .prepare(
-        `SELECT m.id, m.sender_id, u.display_name AS sender_name, m.body, m.created_at
+        `SELECT m.id, m.sender_id, u.display_name AS sender_name, m.body, m.image_url, m.created_at
          FROM messages m JOIN users u ON u.id = m.sender_id
          WHERE m.conversation_id = ? ORDER BY m.created_at ASC LIMIT 300`
       )
@@ -493,6 +530,7 @@ async function handleApi(request, env, url) {
         senderId: r.sender_id,
         senderName: r.sender_name,
         body: r.body,
+        imageUrl: r.image_url || "",
         createdAt: r.created_at,
       })),
     });
@@ -502,7 +540,8 @@ async function handleApi(request, env, url) {
 }
 
 async function serveAvatar(request, env, pathname, r2prefix) {
-  const urlPrefix = r2prefix === "groups/" ? "/api/group-avatar/" : "/api/avatar/";
+  const urlPrefix =
+    r2prefix === "groups/" ? "/api/group-avatar/" : r2prefix === "messages/" ? "/api/message-image/" : "/api/avatar/";
   const id = decodeURIComponent(pathname.slice(urlPrefix.length));
   if (!id) return new Response("Not found", { status: 404 });
   const obj = await env.AVATARS.get(r2prefix + id);

@@ -76,7 +76,7 @@ body {
 .icon-btn:hover { background: var(--panel-2); color: var(--danger); }
 
 .avatar {
-  width: 36px; height: 36px; flex: none; border-radius: 50%;
+  width: 36px; height: 36px; flex: none; border-radius: 50%; position: relative;
   display: grid; place-items: center; font-weight: 700; color: #fff; font-size: .95rem;
   background: #2f80ed;
 }
@@ -194,9 +194,31 @@ textarea.modal-input { resize: vertical; font-family: inherit; }
 /* ---- UNREAD BADGE ---- */
 .badge { flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: #fff; font-size: .72rem; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
 
+/* ---- PRESENCE ---- */
+.presence-dot { position: absolute; bottom: -1px; right: -1px; width: 11px; height: 11px; border-radius: 50%; background: #22c55e; border: 2px solid var(--panel); box-sizing: border-box; }
+.search-results .presence-dot, .picker-list .presence-dot { border-color: var(--panel-2); }
+.online-text { color: #22c55e; font-weight: 600; }
+
+/* ---- TYPING INDICATOR ---- */
+.typing-indicator { height: 0; overflow: hidden; padding: 0 20px; color: var(--text-soft); font-size: .82rem; font-style: italic; background: var(--panel); transition: height .12s ease; }
+.typing-indicator.show { height: 24px; line-height: 24px; }
+
+/* ---- ATTACH / PHOTO MESSAGES ---- */
+.btn-attach { flex: none; width: 42px; height: 42px; border: 0; border-radius: 50%; background: var(--panel-2); font-size: 1.15rem; cursor: pointer; }
+.btn-attach:hover { background: var(--line); }
+.msg.has-image { padding: 4px; max-width: 280px; }
+.msg-image-link { display: block; }
+.msg-image { display: block; max-width: 100%; max-height: 320px; border-radius: 12px; cursor: pointer; }
+.msg.has-image .body { display: block; padding: 5px 6px 0; }
+.msg.has-image .time { padding: 2px 6px 2px; }
+
+/* ---- MOBILE BACK BUTTON ---- */
+.back-btn { display: none; background: transparent; border: 0; color: var(--text); font-size: 2rem; line-height: 1; cursor: pointer; padding: 0 4px 0 0; margin-left: -4px; }
+
 /* ---- MOBILE ---- */
 @media (max-width: 720px) {
   .app { grid-template-columns: 1fr; }
   .app.viewing-chat .sidebar { display: none; }
   .app:not(.viewing-chat) .chat { display: none; }
+  .back-btn { display: block; }
 }
