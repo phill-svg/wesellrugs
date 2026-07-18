@@ -28,7 +28,10 @@ async function ensureDm(db, userA, userB) {
   const existing = await db.prepare("SELECT id FROM conversations WHERE id = ?").bind(convId).first();
   if (!existing) {
     const now = Date.now();
-    await db.prepare("INSERT INTO conversations (id, created_at) VALUES (?, ?)").bind(convId, now).run();
+    await db
+      .prepare("INSERT INTO conversations (id, type, created_at) VALUES (?, 'dm', ?)")
+      .bind(convId, now)
+      .run();
     await db
       .prepare("INSERT OR IGNORE INTO participants (conversation_id, user_id) VALUES (?, ?), (?, ?)")
       .bind(convId, userA, convId, userB)
@@ -45,26 +48,33 @@ async function isParticipant(db, convId, userId) {
   return !!row;
 }
 
+// Friendship state between me and other: none | friends | requested (I sent) | incoming (they sent).
+async function friendState(db, meId, otherId) {
+  const row = await db
+    .prepare(
+      "SELECT user_a, user_b, status FROM friendships WHERE (user_a = ? AND user_b = ?) OR (user_a = ? AND user_b = ?)"
+    )
+    .bind(meId, otherId, otherId, meId)
+    .first();
+  if (!row) return "none";
+  if (row.status === "accepted") return "friends";
+  return row.user_a === meId ? "requested" : "incoming";
+}
+
+async function areFriends(db, a, b) {
+  return (await friendState(db, a, b)) === "friends";
+}
+
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const url = new URL(request.url);
     const { pathname } = url;
-
     try {
-      // ---- WebSocket ----
-      if (pathname === "/ws") {
-        return handleWs(request, env, url);
-      }
-
-      // ---- API ----
-      if (pathname.startsWith("/api/")) {
-        return handleApi(request, env, url);
-      }
+      if (pathname === "/ws") return handleWs(request, env, url);
+      if (pathname.startsWith("/api/")) return handleApi(request, env, url);
     } catch (err) {
-      return json({ error: "Server error", detail: String(err && err.message || err) }, { status: 500 });
+      return json({ error: "Server error", detail: String((err && err.message) || err) }, { status: 500 });
     }
-
-    // ---- Static assets (index.html, styles.css, app.js) ----
     return env.ASSETS.fetch(request);
   },
 };
@@ -74,47 +84,37 @@ async function handleApi(request, env, url) {
   const { pathname } = url;
   const method = request.method;
 
-  // --- Register ---
+  // ---- Register ----
   if (pathname === "/api/register" && method === "POST") {
     const { username, displayName, password } = await request.json().catch(() => ({}));
     const u = (username || "").trim().toLowerCase();
     const name = (displayName || "").trim() || u;
-    if (!/^[a-z0-9_]{3,20}$/.test(u)) {
+    if (!/^[a-z0-9_]{3,20}$/.test(u))
       return json({ error: "Username must be 3–20 chars: letters, numbers, underscore." }, { status: 400 });
-    }
-    if (!password || password.length < 6) {
+    if (!password || password.length < 6)
       return json({ error: "Password must be at least 6 characters." }, { status: 400 });
-    }
     const taken = await db.prepare("SELECT 1 FROM users WHERE username = ?").bind(u).first();
     if (taken) return json({ error: "That username is taken." }, { status: 409 });
-
     const salt = randomId(16);
     const password_hash = await hashPassword(password, salt);
     const id = randomId(12);
     await db
-      .prepare(
-        "INSERT INTO users (id, username, display_name, password_hash, salt, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-      )
+      .prepare("INSERT INTO users (id, username, display_name, password_hash, salt, created_at) VALUES (?, ?, ?, ?, ?, ?)")
       .bind(id, u, name, password_hash, salt, Date.now())
       .run();
-
     const token = await createSession(db, id);
-    return json(
-      { user: { id, username: u, displayName: name } },
-      { headers: { "Set-Cookie": sessionCookie(token) } }
-    );
+    return json({ user: { id, username: u, displayName: name } }, { headers: { "Set-Cookie": sessionCookie(token) } });
   }
 
-  // --- Login ---
+  // ---- Login ----
   if (pathname === "/api/login" && method === "POST") {
     const { username, password } = await request.json().catch(() => ({}));
     const u = (username || "").trim().toLowerCase();
     const row = await db.prepare("SELECT * FROM users WHERE username = ?").bind(u).first();
     if (!row) return json({ error: "Invalid username or password." }, { status: 401 });
     const attempt = await hashPassword(password || "", row.salt);
-    if (!safeEqual(attempt, row.password_hash)) {
+    if (!safeEqual(attempt, row.password_hash))
       return json({ error: "Invalid username or password." }, { status: 401 });
-    }
     const token = await createSession(db, row.id);
     return json(
       { user: { id: row.id, username: row.username, displayName: row.display_name } },
@@ -122,7 +122,7 @@ async function handleApi(request, env, url) {
     );
   }
 
-  // --- Logout ---
+  // ---- Logout ----
   if (pathname === "/api/logout" && method === "POST") {
     await deleteSession(request, db);
     return json({ ok: true }, { headers: { "Set-Cookie": clearCookie() } });
@@ -132,71 +132,198 @@ async function handleApi(request, env, url) {
   const me = await getUser(request, db);
   if (!me) return json({ error: "Not authenticated." }, { status: 401 });
 
-  // --- Current user ---
-  if (pathname === "/api/me" && method === "GET") {
-    return json({ user: me });
-  }
+  if (pathname === "/api/me" && method === "GET") return json({ user: me });
 
-  // --- All other users (to start a DM) ---
-  if (pathname === "/api/users" && method === "GET") {
-    const { results } = await db
-      .prepare("SELECT id, username, display_name FROM users WHERE id != ? ORDER BY display_name")
-      .bind(me.id)
-      .all();
-    return json({
-      users: results.map((r) => ({ id: r.id, username: r.username, displayName: r.display_name })),
-    });
-  }
-
-  // --- My conversations with last message + other participant ---
-  if (pathname === "/api/conversations" && method === "GET") {
+  // ---- Search users ----
+  if (pathname === "/api/users/search" && method === "GET") {
+    const q = (url.searchParams.get("q") || "").trim().toLowerCase();
+    if (q.length < 1) return json({ users: [] });
+    const like = "%" + q.replace(/[%_]/g, "") + "%";
     const { results } = await db
       .prepare(
-        `SELECT c.id AS conv_id,
-                other.id AS other_id, other.username AS other_username, other.display_name AS other_name,
-                m.body AS last_body, m.created_at AS last_at
-         FROM participants p
-         JOIN conversations c ON c.id = p.conversation_id
-         JOIN participants op ON op.conversation_id = c.id AND op.user_id != ?
-         JOIN users other ON other.id = op.user_id
-         LEFT JOIN messages m ON m.id = (
-            SELECT id FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1
-         )
-         WHERE p.user_id = ?
-         ORDER BY COALESCE(m.created_at, c.rowid) DESC`
+        `SELECT id, username, display_name FROM users
+         WHERE id != ? AND (lower(username) LIKE ? OR lower(display_name) LIKE ?)
+         ORDER BY display_name LIMIT 20`
       )
-      .bind(me.id, me.id)
+      .bind(me.id, like, like)
       .all();
-    return json({
-      conversations: results.map((r) => ({
-        id: r.conv_id,
-        other: { id: r.other_id, username: r.other_username, displayName: r.other_name },
-        lastMessage: r.last_body ? { body: r.last_body, createdAt: r.last_at } : null,
-      })),
-    });
+    const users = [];
+    for (const r of results) {
+      users.push({
+        id: r.id,
+        username: r.username,
+        displayName: r.display_name,
+        friendState: await friendState(db, me.id, r.id),
+      });
+    }
+    return json({ users });
   }
 
-  // --- Start / get a DM conversation ---
+  // ---- Friend request ----
+  if (pathname === "/api/friends/request" && method === "POST") {
+    const { toUserId } = await request.json().catch(() => ({}));
+    if (!toUserId || toUserId === me.id) return json({ error: "Invalid user." }, { status: 400 });
+    const other = await db.prepare("SELECT id FROM users WHERE id = ?").bind(toUserId).first();
+    if (!other) return json({ error: "User not found." }, { status: 404 });
+    const st = await friendState(db, me.id, toUserId);
+    if (st === "friends") return json({ error: "You're already friends." }, { status: 409 });
+    if (st === "requested") return json({ state: "requested" });
+    if (st === "incoming") {
+      // They already requested us — accept it.
+      await db
+        .prepare("UPDATE friendships SET status = 'accepted' WHERE user_a = ? AND user_b = ?")
+        .bind(toUserId, me.id)
+        .run();
+      return json({ state: "friends" });
+    }
+    await db
+      .prepare("INSERT INTO friendships (user_a, user_b, status, created_at) VALUES (?, ?, 'pending', ?)")
+      .bind(me.id, toUserId, Date.now())
+      .run();
+    return json({ state: "requested" });
+  }
+
+  // ---- Accept / decline a request ----
+  if ((pathname === "/api/friends/accept" || pathname === "/api/friends/decline") && method === "POST") {
+    const { fromUserId } = await request.json().catch(() => ({}));
+    if (!fromUserId) return json({ error: "Invalid user." }, { status: 400 });
+    const pending = await db
+      .prepare("SELECT 1 FROM friendships WHERE user_a = ? AND user_b = ? AND status = 'pending'")
+      .bind(fromUserId, me.id)
+      .first();
+    if (!pending) return json({ error: "No pending request from that user." }, { status: 404 });
+    if (pathname.endsWith("accept")) {
+      await db
+        .prepare("UPDATE friendships SET status = 'accepted' WHERE user_a = ? AND user_b = ?")
+        .bind(fromUserId, me.id)
+        .run();
+      return json({ state: "friends" });
+    }
+    await db.prepare("DELETE FROM friendships WHERE user_a = ? AND user_b = ?").bind(fromUserId, me.id).run();
+    return json({ state: "none" });
+  }
+
+  // ---- My friends ----
+  if (pathname === "/api/friends" && method === "GET") {
+    const { results } = await db
+      .prepare(
+        `SELECT u.id, u.username, u.display_name FROM friendships f
+         JOIN users u ON u.id = CASE WHEN f.user_a = ?1 THEN f.user_b ELSE f.user_a END
+         WHERE (f.user_a = ?1 OR f.user_b = ?1) AND f.status = 'accepted'
+         ORDER BY u.display_name`
+      )
+      .bind(me.id)
+      .all();
+    return json({ friends: results.map((r) => ({ id: r.id, username: r.username, displayName: r.display_name })) });
+  }
+
+  // ---- Incoming friend requests ----
+  if (pathname === "/api/friends/requests" && method === "GET") {
+    const { results } = await db
+      .prepare(
+        `SELECT u.id, u.username, u.display_name FROM friendships f
+         JOIN users u ON u.id = f.user_a
+         WHERE f.user_b = ? AND f.status = 'pending'
+         ORDER BY f.created_at DESC`
+      )
+      .bind(me.id)
+      .all();
+    return json({ requests: results.map((r) => ({ id: r.id, username: r.username, displayName: r.display_name })) });
+  }
+
+  // ---- Start / get a DM (friends only) ----
   if (pathname === "/api/dm" && method === "POST") {
     const { withUserId } = await request.json().catch(() => ({}));
     if (!withUserId || withUserId === me.id) return json({ error: "Invalid user." }, { status: 400 });
-    const other = await db.prepare("SELECT id FROM users WHERE id = ?").bind(withUserId).first();
-    if (!other) return json({ error: "User not found." }, { status: 404 });
+    if (!(await areFriends(db, me.id, withUserId)))
+      return json({ error: "You can only message friends. Add them first." }, { status: 403 });
     const convId = await ensureDm(db, me.id, withUserId);
     return json({ conversationId: convId });
   }
 
-  // --- Message history ---
+  // ---- Create a group chat ----
+  if (pathname === "/api/groups" && method === "POST") {
+    const { name, memberIds } = await request.json().catch(() => ({}));
+    const groupName = (name || "").trim().slice(0, 60);
+    if (!groupName) return json({ error: "Give your group a name." }, { status: 400 });
+    const ids = Array.isArray(memberIds) ? [...new Set(memberIds.filter((x) => x && x !== me.id))] : [];
+    if (ids.length < 1) return json({ error: "Add at least one friend to the group." }, { status: 400 });
+    // Only allow adding actual friends.
+    for (const id of ids) {
+      if (!(await areFriends(db, me.id, id)))
+        return json({ error: "You can only add friends to a group." }, { status: 403 });
+    }
+    const convId = "grp_" + randomId(12);
+    const now = Date.now();
+    await db
+      .prepare("INSERT INTO conversations (id, type, name, created_by, created_at) VALUES (?, 'group', ?, ?, ?)")
+      .bind(convId, groupName, me.id, now)
+      .run();
+    const all = [me.id, ...ids];
+    for (const uid of all) {
+      await db
+        .prepare("INSERT OR IGNORE INTO participants (conversation_id, user_id) VALUES (?, ?)")
+        .bind(convId, uid)
+        .run();
+    }
+    return json({ conversationId: convId });
+  }
+
+  // ---- My conversations (DMs + groups) ----
+  if (pathname === "/api/conversations" && method === "GET") {
+    const { results: convs } = await db
+      .prepare(
+        `SELECT c.id, c.type, c.name, c.created_at,
+                (SELECT body FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_body,
+                (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_at
+         FROM participants p JOIN conversations c ON c.id = p.conversation_id
+         WHERE p.user_id = ?
+         ORDER BY COALESCE(
+           (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1),
+           c.created_at) DESC`
+      )
+      .bind(me.id)
+      .all();
+
+    // Gather participants for all these conversations in one query.
+    const { results: parts } = await db
+      .prepare(
+        `SELECT p.conversation_id, u.id, u.username, u.display_name
+         FROM participants p JOIN users u ON u.id = p.user_id
+         WHERE p.conversation_id IN (SELECT conversation_id FROM participants WHERE user_id = ?)`
+      )
+      .bind(me.id)
+      .all();
+    const membersByConv = {};
+    for (const r of parts) {
+      (membersByConv[r.conversation_id] ||= []).push({ id: r.id, username: r.username, displayName: r.display_name });
+    }
+
+    const conversations = convs.map((c) => {
+      const members = (membersByConv[c.id] || []).filter((m) => m.id !== me.id);
+      const isGroup = c.type === "group";
+      return {
+        id: c.id,
+        type: c.type,
+        title: isGroup ? c.name : members[0]?.displayName || "Unknown",
+        members,
+        other: isGroup ? null : members[0] || null,
+        lastMessage: c.last_body ? { body: c.last_body, createdAt: c.last_at } : null,
+      };
+    });
+    return json({ conversations });
+  }
+
+  // ---- Message history ----
   if (pathname === "/api/messages" && method === "GET") {
     const convId = url.searchParams.get("conversation");
-    if (!convId || !(await isParticipant(db, convId, me.id))) {
+    if (!convId || !(await isParticipant(db, convId, me.id)))
       return json({ error: "No access to this conversation." }, { status: 403 });
-    }
     const { results } = await db
       .prepare(
         `SELECT m.id, m.sender_id, u.display_name AS sender_name, m.body, m.created_at
          FROM messages m JOIN users u ON u.id = m.sender_id
-         WHERE m.conversation_id = ? ORDER BY m.created_at ASC LIMIT 200`
+         WHERE m.conversation_id = ? ORDER BY m.created_at ASC LIMIT 300`
       )
       .bind(convId)
       .all();
@@ -218,15 +345,9 @@ async function handleWs(request, env, url) {
   const db = env.DB;
   const me = await getUser(request, db);
   if (!me) return new Response("Unauthorized", { status: 401 });
-
   const convId = url.searchParams.get("conversation");
-  if (!convId || !(await isParticipant(db, convId, me.id))) {
-    return new Response("Forbidden", { status: 403 });
-  }
-
-  // Route to the Durable Object for this conversation.
-  const id = env.CHAT.idFromName(convId);
-  const stub = env.CHAT.get(id);
+  if (!convId || !(await isParticipant(db, convId, me.id))) return new Response("Forbidden", { status: 403 });
+  const stub = env.CHAT.get(env.CHAT.idFromName(convId));
   const doUrl = new URL(request.url);
   doUrl.pathname = "/ws";
   doUrl.searchParams.set("conversation", convId);
