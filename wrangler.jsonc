@@ -4,6 +4,11 @@
   "main": "src/index.js",
   "compatibility_date": "2025-07-01",
   "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "wesellrugs.com.au", "custom_domain": true },
+    { "pattern": "www.wesellrugs.com.au", "custom_domain": true }
+  ],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS"
