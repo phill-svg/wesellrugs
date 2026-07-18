@@ -59,6 +59,12 @@ export class ChatRoom {
       return;
     }
 
+    // WebRTC call signalling — relay opaquely to the other participant(s).
+    if (typeof data.type === "string" && data.type.startsWith("call:")) {
+      this.broadcastExcept(ws, JSON.stringify({ ...data, fromId: meta.userId, fromName: meta.displayName }));
+      return;
+    }
+
     if (data.type === "message") {
       const body = typeof data.body === "string" ? data.body.trim().slice(0, 4000) : "";
       let imageUrl = typeof data.imageUrl === "string" ? data.imageUrl : "";

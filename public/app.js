@@ -375,11 +375,13 @@ async function startDm(friend) {
 
 // ---------- Open a conversation ----------
 async function openConversation(conv) {
+  if (call.pc || call.incomingOffer) endCall(true); // leaving a chat ends any call
   state.activeConv = conv;
   state.renderedIds = new Set();
   state.typers = {};
   state.typerTimers = {};
   renderTyping();
+  $("#call-btn").classList.toggle("hidden", conv.type !== "dm");
   $("#chat-empty").classList.add("hidden");
   $("#chat-active").classList.remove("hidden");
   $("#app").classList.add("viewing-chat");
@@ -431,6 +433,7 @@ function connectWs(convId) {
         updateSeen();
         return;
       }
+      if (typeof data.type === "string" && data.type.startsWith("call:")) { handleSignal(data); return; }
       if (data.type === "message" && state.activeConv && data.message.conversationId === state.activeConv.id) {
         renderMessage(data.message);
         scrollBottom();
@@ -894,6 +897,138 @@ $("#group-create").addEventListener("click", async () => {
     const members = state.friends.filter((f) => memberIds.includes(f.id));
     openConversation({ id: conversationId, type: "group", title: name, members });
   } catch (err) { $("#group-error").textContent = err.message; }
+});
+
+// ---------- Video calls (WebRTC) ----------
+const call = { pc: null, localStream: null, role: null, peerName: "", pendingIce: [], incomingOffer: null, muted: false, camOff: false };
+
+function sendSignal(obj) { if (state.ws && state.ws.readyState === WebSocket.OPEN) { try { state.ws.send(JSON.stringify(obj)); } catch {} } }
+
+async function getIceServers() {
+  try { const { iceServers } = await api("/api/turn-credentials"); return iceServers && iceServers.length ? iceServers : [{ urls: "stun:stun.l.google.com:19302" }]; }
+  catch { return [{ urls: "stun:stun.l.google.com:19302" }]; }
+}
+
+function createPeer(iceServers) {
+  const pc = new RTCPeerConnection({ iceServers });
+  pc.onicecandidate = (e) => { if (e.candidate) sendSignal({ type: "call:ice", candidate: e.candidate }); };
+  pc.ontrack = (e) => { $("#remote-video").srcObject = e.streams[0]; $("#call-info").textContent = "Connected"; };
+  pc.onconnectionstatechange = () => {
+    const st = pc.connectionState;
+    if (st === "failed" || st === "closed") endCall(false);
+    else if (st === "disconnected") $("#call-info").textContent = "Reconnecting…";
+  };
+  return pc;
+}
+
+async function getMedia() {
+  return await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: true });
+}
+async function flushIce() {
+  for (const c of call.pendingIce) { try { await call.pc.addIceCandidate(new RTCIceCandidate(c)); } catch {} }
+  call.pendingIce = [];
+}
+
+async function startCall() {
+  if (call.pc || call.incomingOffer || !state.activeConv || state.activeConv.type !== "dm") return;
+  call.role = "caller";
+  call.peerName = state.activeConv.other ? state.activeConv.other.displayName : "…";
+  try { call.localStream = await getMedia(); } catch { alert("Camera & microphone access is needed to make a call."); return; }
+  const ice = await getIceServers();
+  call.pc = createPeer(ice);
+  call.localStream.getTracks().forEach((t) => call.pc.addTrack(t, call.localStream));
+  showCallUI("Calling " + call.peerName + "…");
+  const offer = await call.pc.createOffer();
+  await call.pc.setLocalDescription(offer);
+  sendSignal({ type: "call:offer", sdp: offer });
+}
+
+async function acceptCall() {
+  const offer = call.incomingOffer;
+  if (!offer) return;
+  $("#incoming-call").classList.add("hidden");
+  try { call.localStream = await getMedia(); } catch { declineCall(); return; }
+  const ice = await getIceServers();
+  call.pc = createPeer(ice);
+  call.localStream.getTracks().forEach((t) => call.pc.addTrack(t, call.localStream));
+  showCallUI("Connecting…");
+  await call.pc.setRemoteDescription(new RTCSessionDescription(offer));
+  await flushIce();
+  const answer = await call.pc.createAnswer();
+  await call.pc.setLocalDescription(answer);
+  sendSignal({ type: "call:answer", sdp: answer });
+  call.incomingOffer = null;
+}
+
+function declineCall() {
+  sendSignal({ type: "call:decline" });
+  $("#incoming-call").classList.add("hidden");
+  call.incomingOffer = null;
+  call.role = null;
+}
+
+async function handleSignal(data) {
+  switch (data.type) {
+    case "call:offer":
+      if (call.pc || call.incomingOffer) { sendSignal({ type: "call:busy" }); return; }
+      call.role = "callee";
+      call.incomingOffer = data.sdp;
+      call.peerName = data.fromName || "Someone";
+      showIncoming(data.fromName, data.fromId);
+      break;
+    case "call:answer":
+      if (call.pc) { try { await call.pc.setRemoteDescription(new RTCSessionDescription(data.sdp)); await flushIce(); } catch {} }
+      break;
+    case "call:ice":
+      if (call.pc && call.pc.remoteDescription) { try { await call.pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch {} }
+      else call.pendingIce.push(data.candidate);
+      break;
+    case "call:decline": $("#call-info").textContent = "Call declined"; setTimeout(() => endCall(false), 1200); break;
+    case "call:hangup": endCall(false); break;
+    case "call:busy": $("#call-info").textContent = (call.peerName || "They") + " is busy"; setTimeout(() => endCall(false), 1600); break;
+  }
+}
+
+function showCallUI(status) {
+  $("#call-info").textContent = status;
+  $("#local-video").srcObject = call.localStream;
+  call.muted = false; call.camOff = false;
+  $("#call-mute").classList.remove("off");
+  $("#call-camera").classList.remove("off");
+  $("#call-overlay").classList.remove("hidden");
+}
+function showIncoming(name, id) {
+  const other = state.activeConv && state.activeConv.other && state.activeConv.other.id === id ? state.activeConv.other : { displayName: name };
+  paintAvatar($("#incoming-avatar"), other);
+  $("#incoming-name").textContent = name || "Someone";
+  $("#incoming-call").classList.remove("hidden");
+}
+function endCall(sendHangup) {
+  if (sendHangup) sendSignal({ type: "call:hangup" });
+  if (call.pc) { try { call.pc.close(); } catch {} }
+  if (call.localStream) call.localStream.getTracks().forEach((t) => t.stop());
+  call.pc = null; call.localStream = null; call.role = null; call.incomingOffer = null; call.pendingIce = [];
+  $("#remote-video").srcObject = null;
+  $("#local-video").srcObject = null;
+  $("#call-overlay").classList.add("hidden");
+  $("#incoming-call").classList.add("hidden");
+}
+
+$("#call-btn").addEventListener("click", startCall);
+$("#call-hangup").addEventListener("click", () => endCall(true));
+$("#incoming-accept").addEventListener("click", acceptCall);
+$("#incoming-decline").addEventListener("click", declineCall);
+$("#call-mute").addEventListener("click", () => {
+  if (!call.localStream) return;
+  call.muted = !call.muted;
+  call.localStream.getAudioTracks().forEach((t) => (t.enabled = !call.muted));
+  $("#call-mute").classList.toggle("off", call.muted);
+});
+$("#call-camera").addEventListener("click", () => {
+  if (!call.localStream) return;
+  call.camOff = !call.camOff;
+  call.localStream.getVideoTracks().forEach((t) => (t.enabled = !call.camOff));
+  $("#call-camera").classList.toggle("off", call.camOff);
 });
 
 // ---------- Boot ----------

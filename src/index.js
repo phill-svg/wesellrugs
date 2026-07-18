@@ -296,6 +296,21 @@ async function handleApi(request, env, url) {
     return json({ ok: true });
   }
 
+  // ---- Configure Cloudflare TURN relay for calls ----
+  if (pathname === "/api/admin/turn-setup" && method === "POST") {
+    const { keyId, apiToken } = await request.json().catch(() => ({}));
+    if (!keyId || !apiToken) return json({ error: "Both Key ID and API token are required." }, { status: 400 });
+    await db
+      .prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('turn', ?)")
+      .bind(JSON.stringify({ keyId: String(keyId).trim(), apiToken: String(apiToken).trim() }))
+      .run();
+    return json({ ok: true });
+  }
+  if (pathname === "/api/admin/turn-status" && method === "GET") {
+    const row = await db.prepare("SELECT value FROM app_config WHERE key = 'turn'").first();
+    return json({ configured: !!row });
+  }
+
   // ---- Broadcast an announcement to every user ----
   if (pathname === "/api/admin/broadcast" && method === "POST") {
     const { message } = await request.json().catch(() => ({}));
@@ -341,6 +356,30 @@ async function handleApi(request, env, url) {
   if (pathname === "/api/presence" && method === "POST") {
     await db.prepare("UPDATE users SET last_seen = ? WHERE id = ?").bind(Date.now(), me.id).run();
     return json({ ok: true });
+  }
+
+  // ---- ICE servers for calls (STUN always; Cloudflare TURN relay if configured) ----
+  if (pathname === "/api/turn-credentials" && method === "GET") {
+    const iceServers = [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+    ];
+    try {
+      const turnRow = await db.prepare("SELECT value FROM app_config WHERE key = 'turn'").first();
+      if (turnRow) {
+        const { keyId, apiToken } = JSON.parse(turnRow.value);
+        const res = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${keyId}/credentials/generate`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ ttl: 86400 }),
+        });
+        if (res.ok) {
+          const d = await res.json();
+          if (d.iceServers) iceServers.push(d.iceServers);
+        }
+      }
+    } catch {}
+    return json({ iceServers });
   }
 
   // ---- Web Push: VAPID public key ----

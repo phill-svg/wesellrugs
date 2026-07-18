@@ -36,6 +36,8 @@
     .actions{white-space:nowrap}
     .broadcast{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:16px}
     textarea{width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:10px;font:inherit;resize:vertical;min-height:70px}
+    .broadcast input{width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px;font:inherit}
+    #turn-status{color:var(--ok)}
     .broadcast .row{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
     .send-msg{font-size:.85rem}
   </style>
@@ -65,6 +67,14 @@
         <span id="broadcast-msg" class="send-msg muted"></span>
         <button class="btn" onclick="broadcast()">Send announcement</button>
       </div>
+    </div>
+
+    <h2>📹 Video-call relay (TURN)</h2>
+    <div class="broadcast">
+      <p class="muted" style="margin-top:0">Optional but recommended — makes nearly all video calls connect. In Cloudflare dashboard go to <b>Realtime → TURN → Create</b>, then paste the Key ID and API token here. <b id="turn-status"></b></p>
+      <input id="turn-key" placeholder="TURN Key ID" />
+      <input id="turn-token" type="password" placeholder="TURN API Token" style="margin-top:8px" />
+      <div class="row"><span id="turn-msg" class="send-msg muted"></span><button class="btn" onclick="saveTurn()">Save relay</button></div>
     </div>
 
     <h2>Users (<span id="ucount">0</span>)</h2>
@@ -125,6 +135,8 @@
           </td>
         </tr>`).join("");
 
+      loadTurnStatus();
+
       $("#messages").innerHTML = (data.messages || []).map((m) => `
         <tr>
           <td class="muted">${fmt(m.createdAt)}</td>
@@ -136,6 +148,17 @@
     }
     function card(n, label) { return `<div class="card"><b>${n ?? 0}</b><span>${label}</span></div>`; }
 
+    async function loadTurnStatus() {
+      try { const r = await fetch("/api/admin/turn-status").then((x) => x.json()); $("#turn-status").textContent = r.configured ? "✓ Relay is active" : ""; } catch {}
+    }
+    async function saveTurn() {
+      const keyId = $("#turn-key").value.trim(), apiToken = $("#turn-token").value.trim();
+      const msg = $("#turn-msg");
+      if (!keyId || !apiToken) { msg.textContent = "Enter both fields."; return; }
+      msg.textContent = "Saving…";
+      try { await post("/api/admin/turn-setup", { keyId, apiToken }); msg.textContent = "Relay saved ✓"; $("#turn-token").value = ""; loadTurnStatus(); }
+      catch (e) { msg.textContent = e.message; }
+    }
     async function broadcast() {
       const text = $("#broadcast-text").value.trim();
       if (!text) return;

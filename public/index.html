@@ -98,6 +98,7 @@
             <div class="peer-name" id="peer-name"></div>
             <div class="peer-status" id="peer-status"></div>
           </div>
+          <button type="button" id="call-btn" class="call-btn hidden" title="Video call" aria-label="Video call">📹</button>
         </header>
         <div id="messages" class="messages"></div>
         <div id="read-receipt" class="read-receipt"></div>
@@ -217,6 +218,31 @@
       <div class="modal-actions">
         <button id="group-cancel" class="btn-ghost-sm" type="button">Cancel</button>
         <button id="group-create" class="btn-primary-sm" type="button">Create group</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- IN-CALL SCREEN -->
+  <div id="call-overlay" class="call-overlay hidden">
+    <video id="remote-video" class="remote-video" autoplay playsinline></video>
+    <video id="local-video" class="local-video" autoplay playsinline muted></video>
+    <div class="call-info" id="call-info"></div>
+    <div class="call-controls">
+      <button id="call-mute" class="call-ctrl" type="button" title="Mute mic">🎙️</button>
+      <button id="call-camera" class="call-ctrl" type="button" title="Turn camera off">📷</button>
+      <button id="call-hangup" class="call-ctrl hangup" type="button" title="Hang up">📴</button>
+    </div>
+  </div>
+
+  <!-- INCOMING CALL SCREEN -->
+  <div id="incoming-call" class="incoming-call hidden">
+    <div class="incoming-card">
+      <span class="avatar xl" id="incoming-avatar"></span>
+      <div class="incoming-name" id="incoming-name"></div>
+      <div class="incoming-sub">Incoming video call…</div>
+      <div class="incoming-actions">
+        <button id="incoming-decline" class="call-ctrl hangup" type="button">Decline</button>
+        <button id="incoming-accept" class="call-ctrl accept" type="button">Accept</button>
       </div>
     </div>
   </div>

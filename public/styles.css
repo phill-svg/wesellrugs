@@ -224,6 +224,26 @@ textarea.modal-input { resize: vertical; font-family: inherit; }
 /* ---- MOBILE BACK BUTTON ---- */
 .back-btn { display: none; background: transparent; border: 0; color: var(--text); font-size: 2rem; line-height: 1; cursor: pointer; padding: 0 4px 0 0; margin-left: -4px; }
 
+/* ---- CALLS ---- */
+.call-btn { margin-left: auto; background: var(--panel-2); border: 1px solid var(--line); border-radius: 50%; width: 40px; height: 40px; font-size: 1.15rem; cursor: pointer; }
+.call-btn:hover { border-color: var(--accent); }
+.call-overlay { position: fixed; inset: 0; background: #05060a; z-index: 200; display: flex; align-items: center; justify-content: center; }
+.remote-video { width: 100%; height: 100%; object-fit: cover; background: #05060a; }
+.local-video { position: absolute; top: 16px; right: 16px; width: 108px; height: 150px; object-fit: cover; border-radius: 12px; border: 2px solid rgba(255,255,255,.2); background: #111; z-index: 2; }
+.call-info { position: absolute; top: 20px; left: 0; right: 0; text-align: center; color: #fff; font-weight: 600; font-size: 1.05rem; text-shadow: 0 1px 4px rgba(0,0,0,.6); z-index: 2; }
+.call-controls { position: absolute; bottom: 34px; left: 0; right: 0; display: flex; gap: 18px; justify-content: center; z-index: 3; }
+.call-ctrl { width: 62px; height: 62px; border-radius: 50%; border: 0; background: rgba(255,255,255,.16); color: #fff; font-size: 1.5rem; cursor: pointer; backdrop-filter: blur(6px); }
+.call-ctrl:hover { background: rgba(255,255,255,.28); }
+.call-ctrl.off { background: rgba(255,255,255,.5); }
+.call-ctrl.hangup { background: var(--danger); }
+.call-ctrl.accept { background: var(--ok); }
+.incoming-call { position: fixed; inset: 0; background: rgba(5,6,10,.9); z-index: 210; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.incoming-card { text-align: center; color: #fff; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.incoming-name { font-family: "Fraunces", serif; font-size: 1.6rem; font-weight: 700; }
+.incoming-sub { color: var(--soft); }
+.incoming-actions { display: flex; gap: 40px; margin-top: 26px; }
+.incoming-actions .call-ctrl { width: 68px; height: 68px; font-size: .85rem; font-weight: 700; }
+
 /* ---- MOBILE ---- */
 @media (max-width: 720px) {
   .app { grid-template-columns: 1fr; }
