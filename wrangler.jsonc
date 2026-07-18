@@ -20,6 +20,12 @@
       "database_id": "caaebcf0-d739-45da-bb5e-5751a98092fc"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "AVATARS",
+      "bucket_name": "wesellrugs-avatars"
+    }
+  ],
   "durable_objects": {
     "bindings": [
       {

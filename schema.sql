@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS users (
   salt          TEXT NOT NULL,
   bio           TEXT,
   avatar_color  TEXT,
+  avatar_url    TEXT,
   created_at    INTEGER NOT NULL
 );
 

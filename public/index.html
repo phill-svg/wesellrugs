@@ -105,6 +105,12 @@
     <div class="modal">
       <div class="profile-hero">
         <span class="avatar xl" id="settings-avatar"></span>
+        <div class="avatar-actions">
+          <button id="avatar-upload-btn" class="btn-ghost-sm" type="button">Change photo</button>
+          <button id="avatar-remove-btn" class="btn-ghost-sm hidden" type="button">Remove</button>
+        </div>
+        <input id="avatar-file" type="file" accept="image/*" class="hidden" />
+        <p id="avatar-msg" class="modal-msg"></p>
       </div>
       <h3>Edit profile</h3>
       <label class="modal-label">Display name

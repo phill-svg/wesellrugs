@@ -75,6 +75,7 @@ export default {
     const { pathname } = url;
     try {
       if (pathname === "/ws") return handleWs(request, env, url);
+      if (pathname.startsWith("/api/avatar/") && request.method === "GET") return serveAvatar(request, env, pathname);
       if (pathname.startsWith("/api/")) return handleApi(request, env, url);
     } catch (err) {
       return json({ error: "Server error", detail: String((err && err.message) || err) }, { status: 500 });
@@ -172,13 +173,35 @@ async function handleApi(request, env, url) {
     return json({ ok: true });
   }
 
+  // ---- Upload my profile picture ----
+  if (pathname === "/api/me/avatar" && method === "POST") {
+    const contentType = request.headers.get("Content-Type") || "";
+    const allowed = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+    if (!allowed.includes(contentType.split(";")[0].trim()))
+      return json({ error: "Please upload a JPEG, PNG, WebP or GIF image." }, { status: 400 });
+    const buf = await request.arrayBuffer();
+    if (buf.byteLength === 0) return json({ error: "Empty image." }, { status: 400 });
+    if (buf.byteLength > 3 * 1024 * 1024) return json({ error: "Image is too large (max 3 MB)." }, { status: 413 });
+    await env.AVATARS.put("avatars/" + me.id, buf, { httpMetadata: { contentType } });
+    const avatarUrl = `/api/avatar/${me.id}?v=${Date.now()}`;
+    await db.prepare("UPDATE users SET avatar_url = ? WHERE id = ?").bind(avatarUrl, me.id).run();
+    return json({ avatarUrl });
+  }
+
+  // ---- Remove my profile picture ----
+  if (pathname === "/api/me/avatar" && method === "DELETE") {
+    await env.AVATARS.delete("avatars/" + me.id);
+    await db.prepare("UPDATE users SET avatar_url = NULL WHERE id = ?").bind(me.id).run();
+    return json({ ok: true });
+  }
+
   // ---- View another user's public profile ----
   if (pathname === "/api/profile" && method === "GET") {
     const id = url.searchParams.get("id");
-    const row = await db.prepare("SELECT id, username, display_name, bio, avatar_color FROM users WHERE id = ?").bind(id).first();
+    const row = await db.prepare("SELECT id, username, display_name, bio, avatar_color, avatar_url FROM users WHERE id = ?").bind(id).first();
     if (!row) return json({ error: "User not found." }, { status: 404 });
     return json({
-      user: { id: row.id, username: row.username, displayName: row.display_name, bio: row.bio || "", avatarColor: row.avatar_color || "" },
+      user: { id: row.id, username: row.username, displayName: row.display_name, bio: row.bio || "", avatarColor: row.avatar_color || "", avatarUrl: row.avatar_url || "" },
       friendState: await friendState(db, me.id, row.id),
     });
   }
@@ -190,7 +213,7 @@ async function handleApi(request, env, url) {
     const like = "%" + q.replace(/[%_]/g, "") + "%";
     const { results } = await db
       .prepare(
-        `SELECT id, username, display_name, bio, avatar_color FROM users
+        `SELECT id, username, display_name, bio, avatar_color, avatar_url FROM users
          WHERE id != ? AND (lower(username) LIKE ? OR lower(display_name) LIKE ?)
          ORDER BY display_name LIMIT 20`
       )
@@ -204,6 +227,7 @@ async function handleApi(request, env, url) {
         displayName: r.display_name,
         bio: r.bio || "",
         avatarColor: r.avatar_color || "",
+        avatarUrl: r.avatar_url || "",
         friendState: await friendState(db, me.id, r.id),
       });
     }
@@ -258,7 +282,7 @@ async function handleApi(request, env, url) {
   if (pathname === "/api/friends" && method === "GET") {
     const { results } = await db
       .prepare(
-        `SELECT u.id, u.username, u.display_name, u.bio, u.avatar_color FROM friendships f
+        `SELECT u.id, u.username, u.display_name, u.bio, u.avatar_color, u.avatar_url FROM friendships f
          JOIN users u ON u.id = CASE WHEN f.user_a = ?1 THEN f.user_b ELSE f.user_a END
          WHERE (f.user_a = ?1 OR f.user_b = ?1) AND f.status = 'accepted'
          ORDER BY u.display_name`
@@ -272,6 +296,7 @@ async function handleApi(request, env, url) {
         displayName: r.display_name,
         bio: r.bio || "",
         avatarColor: r.avatar_color || "",
+        avatarUrl: r.avatar_url || "",
       })),
     });
   }
@@ -351,7 +376,7 @@ async function handleApi(request, env, url) {
     // Gather participants for all these conversations in one query.
     const { results: parts } = await db
       .prepare(
-        `SELECT p.conversation_id, u.id, u.username, u.display_name, u.bio, u.avatar_color
+        `SELECT p.conversation_id, u.id, u.username, u.display_name, u.bio, u.avatar_color, u.avatar_url
          FROM participants p JOIN users u ON u.id = p.user_id
          WHERE p.conversation_id IN (SELECT conversation_id FROM participants WHERE user_id = ?)`
       )
@@ -365,6 +390,7 @@ async function handleApi(request, env, url) {
         displayName: r.display_name,
         bio: r.bio || "",
         avatarColor: r.avatar_color || "",
+        avatarUrl: r.avatar_url || "",
       });
     }
 
@@ -421,6 +447,19 @@ async function handleApi(request, env, url) {
   }
 
   return json({ error: "Not found." }, { status: 404 });
+}
+
+async function serveAvatar(request, env, pathname) {
+  const id = decodeURIComponent(pathname.slice("/api/avatar/".length));
+  if (!id) return new Response("Not found", { status: 404 });
+  const obj = await env.AVATARS.get("avatars/" + id);
+  if (!obj) return new Response("Not found", { status: 404 });
+  const headers = new Headers();
+  obj.writeHttpMetadata(headers);
+  if (!headers.has("Content-Type")) headers.set("Content-Type", "image/jpeg");
+  headers.set("Cache-Control", "public, max-age=31536000, immutable");
+  headers.set("etag", obj.httpEtag);
+  return new Response(obj.body, { headers });
 }
 
 async function handleWs(request, env, url) {

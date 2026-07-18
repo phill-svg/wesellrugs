@@ -45,13 +45,23 @@ function hashStr(s) {
 function colorFor(u) {
   return (u && u.avatarColor) || AVATAR_COLORS[hashStr((u && (u.username || u.displayName)) || "?") % AVATAR_COLORS.length];
 }
+function escapeAttr(s) { return String(s).replace(/"/g, "&quot;"); }
 function avatarHtml(u, cls = "") {
+  if (u && u.avatarUrl)
+    return `<span class="avatar pic ${cls}"><img src="${escapeAttr(u.avatarUrl)}" alt="" loading="lazy"></span>`;
   return `<span class="avatar ${cls}" style="background:${colorFor(u)}">${initials(u.displayName)}</span>`;
 }
 function paintAvatar(el, u) {
-  el.textContent = initials(u.displayName);
-  el.style.background = colorFor(u);
   el.classList.remove("group");
+  if (u && u.avatarUrl) {
+    el.classList.add("pic");
+    el.style.background = "transparent";
+    el.innerHTML = `<img src="${escapeAttr(u.avatarUrl)}" alt="">`;
+  } else {
+    el.classList.remove("pic");
+    el.style.background = colorFor(u);
+    el.textContent = initials(u.displayName);
+  }
 }
 
 // ---------- Auth UI ----------
@@ -382,11 +392,71 @@ function openSettings() {
   $("#pw-msg").textContent = "";
   $("#pw-current").value = "";
   $("#pw-new").value = "";
-  state.settingsColor = colorFor(state.me);
+  state.settingsColor = state.me.avatarColor || colorFor(state.me);
+  $("#avatar-msg").textContent = "";
+  $("#avatar-file").value = "";
+  $("#avatar-remove-btn").classList.toggle("hidden", !state.me.avatarUrl);
   renderSwatches();
   updateSettingsAvatar();
   $("#settings-modal").classList.remove("hidden");
 }
+
+// ---- Profile picture upload ----
+function resizeImage(file, size = 256) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext("2d");
+      const scale = Math.max(size / img.width, size / img.height);
+      const w = img.width * scale, h = img.height * scale;
+      ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+      URL.revokeObjectURL(url);
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Couldn't process image."))), "image/jpeg", 0.85);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That doesn't look like a valid image.")); };
+    img.src = url;
+  });
+}
+
+$("#avatar-upload-btn").addEventListener("click", () => $("#avatar-file").click());
+$("#avatar-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const msg = $("#avatar-msg");
+  msg.className = "modal-msg";
+  msg.textContent = "Uploading…";
+  try {
+    const blob = await resizeImage(file, 256);
+    const res = await fetch("/api/me/avatar", { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Upload failed.");
+    state.me.avatarUrl = data.avatarUrl;
+    updateSettingsAvatar();
+    renderMe();
+    refreshAll();
+    $("#avatar-remove-btn").classList.remove("hidden");
+    msg.textContent = "Photo updated ✓";
+    msg.classList.add("ok");
+  } catch (err) { msg.textContent = err.message; msg.classList.add("err"); }
+});
+$("#avatar-remove-btn").addEventListener("click", async () => {
+  const msg = $("#avatar-msg");
+  msg.className = "modal-msg";
+  try {
+    await api("/api/me/avatar", { method: "DELETE" });
+    state.me.avatarUrl = "";
+    updateSettingsAvatar();
+    renderMe();
+    refreshAll();
+    $("#avatar-remove-btn").classList.add("hidden");
+    msg.textContent = "Photo removed.";
+    msg.classList.add("ok");
+  } catch (err) { msg.textContent = err.message; msg.classList.add("err"); }
+});
 function renderSwatches() {
   const wrap = $("#settings-colors");
   wrap.innerHTML = "";
@@ -400,9 +470,11 @@ function renderSwatches() {
   }
 }
 function updateSettingsAvatar() {
-  const el = $("#settings-avatar");
-  el.textContent = initials($("#settings-name").value || state.me.displayName);
-  el.style.background = state.settingsColor;
+  paintAvatar($("#settings-avatar"), {
+    displayName: $("#settings-name").value || state.me.displayName,
+    avatarColor: state.settingsColor,
+    avatarUrl: state.me.avatarUrl,
+  });
 }
 $("#settings-name").addEventListener("input", updateSettingsAvatar);
 

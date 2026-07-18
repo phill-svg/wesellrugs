@@ -82,6 +82,8 @@ body {
 }
 .avatar.sm { width: 30px; height: 30px; font-size: .8rem; }
 .avatar.xl { width: 84px; height: 84px; font-size: 1.9rem; }
+.avatar.pic { background: transparent; overflow: hidden; }
+.avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; }
 
 .sidebar-section-title { padding: 14px 16px 6px; font-size: .72rem; text-transform: uppercase; letter-spacing: .1em; color: var(--text-soft); }
 .conv-list, .people-list, .row-list { list-style: none; margin: 0; padding: 0 8px; }
@@ -176,6 +178,7 @@ body {
 .profile-username { color: var(--text-soft); font-size: .9rem; }
 .profile-bio { text-align: center; color: var(--text); line-height: 1.5; margin: 0 0 1rem; white-space: pre-wrap; }
 .profile-bio.muted { color: var(--text-soft); font-style: italic; }
+.avatar-actions { display: flex; gap: 8px; justify-content: center; margin-top: 4px; }
 
 .swatches { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 4px; }
 .swatch { width: 30px; height: 30px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
