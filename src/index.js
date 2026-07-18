@@ -103,6 +103,7 @@ export default {
       if (pathname.startsWith("/api/avatar/") && request.method === "GET") return serveAvatar(request, env, pathname, "avatars/");
       if (pathname.startsWith("/api/group-avatar/") && request.method === "GET") return serveAvatar(request, env, pathname, "groups/");
       if (pathname.startsWith("/api/message-image/") && request.method === "GET") return serveAvatar(request, env, pathname, "messages/");
+      if (pathname.startsWith("/api/message-audio/") && request.method === "GET") return serveAvatar(request, env, pathname, "audio/");
       if (pathname.startsWith("/api/")) return handleApi(request, env, url);
     } catch (err) {
       return json({ error: "Server error", detail: String((err && err.message) || err) }, { status: 500 });
@@ -452,6 +453,37 @@ async function handleApi(request, env, url) {
     const key = me.id + "_" + randomId(10);
     await env.AVATARS.put("messages/" + key, buf, { httpMetadata: { contentType } });
     return json({ imageUrl: `/api/message-image/${key}?v=${Date.now()}` });
+  }
+
+  // ---- Upload a voice message ----
+  if (pathname === "/api/messages/audio" && method === "POST") {
+    const conversationId = url.searchParams.get("conversation");
+    if (!conversationId || !(await isParticipant(db, conversationId, me.id)))
+      return json({ error: "No access to this conversation." }, { status: 403 });
+    const contentType = request.headers.get("Content-Type") || "";
+    if (!contentType.startsWith("audio/")) return json({ error: "Not an audio recording." }, { status: 400 });
+    const buf = await request.arrayBuffer();
+    if (!buf.byteLength) return json({ error: "Empty recording." }, { status: 400 });
+    if (buf.byteLength > 5 * 1024 * 1024) return json({ error: "Recording is too long (max ~5 MB)." }, { status: 413 });
+    const key = me.id + "_" + randomId(10);
+    await env.AVATARS.put("audio/" + key, buf, { httpMetadata: { contentType } });
+    return json({ audioUrl: `/api/message-audio/${key}?v=${Date.now()}` });
+  }
+
+  // ---- Toggle a reaction on a message ----
+  if (pathname === "/api/reactions/toggle" && method === "POST") {
+    const { messageId, emoji } = await request.json().catch(() => ({}));
+    const e = (emoji || "").toString().slice(0, 8);
+    if (!messageId || !e) return json({ error: "Invalid reaction." }, { status: 400 });
+    const msg = await db.prepare("SELECT conversation_id FROM messages WHERE id = ?").bind(messageId).first();
+    if (!msg || !(await isParticipant(db, msg.conversation_id, me.id))) return json({ error: "No access." }, { status: 403 });
+    const existing = await db.prepare("SELECT 1 FROM reactions WHERE message_id = ? AND user_id = ? AND emoji = ?").bind(messageId, me.id, e).first();
+    if (existing) await db.prepare("DELETE FROM reactions WHERE message_id = ? AND user_id = ? AND emoji = ?").bind(messageId, me.id, e).run();
+    else await db.prepare("INSERT OR IGNORE INTO reactions (message_id, user_id, emoji, created_at) VALUES (?, ?, ?, ?)").bind(messageId, me.id, e, Date.now()).run();
+    const { results } = await db.prepare("SELECT emoji, user_id FROM reactions WHERE message_id = ?").bind(messageId).all();
+    const reactions = {};
+    for (const r of results) (reactions[r.emoji] ||= []).push(r.user_id);
+    return json({ messageId, reactions });
   }
 
   // ---- Update my profile (display name, bio, avatar colour) ----
@@ -806,7 +838,8 @@ async function handleApi(request, env, url) {
 
     const { results } = await db
       .prepare(
-        `SELECT m.id, m.sender_id, u.display_name AS sender_name, m.body, m.image_url, m.expires_at, m.created_at
+        `SELECT m.id, m.sender_id, u.display_name AS sender_name, m.body, m.image_url, m.audio_url,
+                m.reply_to, m.reply_sender, m.reply_snippet, m.expires_at, m.created_at
          FROM messages m JOIN users u ON u.id = m.sender_id
          WHERE m.conversation_id = ? AND (m.expires_at IS NULL OR m.expires_at > ?)
          ORDER BY m.created_at ASC LIMIT 300`
@@ -818,6 +851,18 @@ async function handleApi(request, env, url) {
       .prepare("SELECT MIN(last_read_at) AS r FROM participants WHERE conversation_id = ? AND user_id != ?")
       .bind(convId, me.id)
       .first();
+    // Aggregate reactions for these messages: { messageId: { emoji: [userIds] } }
+    const reactionsByMsg = {};
+    const ids = results.map((r) => r.id);
+    if (ids.length) {
+      const ph = ids.map(() => "?").join(",");
+      const { results: rx } = await db.prepare(`SELECT message_id, emoji, user_id FROM reactions WHERE message_id IN (${ph})`).bind(...ids).all();
+      for (const r of rx) {
+        (reactionsByMsg[r.message_id] ||= {});
+        (reactionsByMsg[r.message_id][r.emoji] ||= []).push(r.user_id);
+      }
+    }
+
     return json({
       othersReadAt: (readRow && readRow.r) || 0,
       messages: results.map((r) => ({
@@ -826,6 +871,11 @@ async function handleApi(request, env, url) {
         senderName: r.sender_name,
         body: r.body,
         imageUrl: r.image_url || "",
+        audioUrl: r.audio_url || "",
+        replyTo: r.reply_to || "",
+        replySender: r.reply_sender || "",
+        replySnippet: r.reply_snippet || "",
+        reactions: reactionsByMsg[r.id] || {},
         expiresAt: r.expires_at || 0,
         createdAt: r.created_at,
       })),
@@ -848,7 +898,10 @@ async function handleApi(request, env, url) {
 
 async function serveAvatar(request, env, pathname, r2prefix) {
   const urlPrefix =
-    r2prefix === "groups/" ? "/api/group-avatar/" : r2prefix === "messages/" ? "/api/message-image/" : "/api/avatar/";
+    r2prefix === "groups/" ? "/api/group-avatar/"
+    : r2prefix === "messages/" ? "/api/message-image/"
+    : r2prefix === "audio/" ? "/api/message-audio/"
+    : "/api/avatar/";
   const id = decodeURIComponent(pathname.slice(urlPrefix.length));
   if (!id) return new Response("Not found", { status: 404 });
   const obj = await env.AVATARS.get(r2prefix + id);

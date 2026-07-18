@@ -15,6 +15,9 @@ const state = {
   typerTimers: {},
   othersReadAt: 0, // for the open DM: when the other person last read
   lastOutgoingAt: 0,
+  msgById: {},
+  replyingTo: null,
+  conversations: [],
 };
 
 const AVATAR_COLORS = ["#2f80ed", "#0ea5a4", "#10b981", "#f59e0b", "#f97316", "#ef4444", "#6366f1", "#64748b"];
@@ -265,11 +268,23 @@ function updateWelcome() {
   else sub = `You have ${fcount} friend${fcount === 1 ? "" : "s"}. Pick a chat or start a new one.`;
   $("#welcome-sub").textContent = sub;
   $("#welcome-tip").textContent = WELCOME_TIPS[Math.floor(Math.random() * WELCOME_TIPS.length)];
+  const recent = (state.conversations || []).slice(0, 4);
+  const rc = $("#welcome-recent");
+  rc.innerHTML = recent.map((c) => `<span class="recent-tile" data-id="${escapeAttr(c.id)}">${c.type === "group" ? "👥 " : ""}${escapeHtml(c.title)}</span>`).join("");
+  rc.querySelectorAll(".recent-tile").forEach((t) =>
+    t.addEventListener("click", () => { const c = state.conversations.find((x) => x.id === t.dataset.id); if (c) openConversation(c); })
+  );
 }
 $("#wc-search").addEventListener("click", () => $("#search-input").focus());
 $("#wc-group").addEventListener("click", () => $("#new-group-btn").click());
 $("#wc-notif").addEventListener("click", openSettings);
 $("#wc-profile").addEventListener("click", openSettings);
+$("#wc-invite").addEventListener("click", async () => {
+  const url = location.origin;
+  const shareData = { title: "We Sell Rugs", text: "Chat with me on We Sell Rugs 💬", url };
+  if (navigator.share) { try { await navigator.share(shareData); } catch {} }
+  else { try { await navigator.clipboard.writeText(url); alert("Invite link copied:\n" + url); } catch { prompt("Share this link:", url); } }
+});
 
 async function refreshAll() {
   await Promise.all([loadRequests(), loadFriends(), loadConversations()]);
@@ -367,6 +382,8 @@ async function loadFriends() {
 async function loadConversations() {
   let conversations = [];
   try { ({ conversations } = await api("/api/conversations")); } catch { return; }
+  state.conversations = conversations;
+  updateWelcome();
   processUnread(conversations);
   updateActivePresence(conversations);
   const list = $("#conversation-list");
@@ -405,8 +422,10 @@ async function openConversation(conv) {
   if (call.pc || call.incomingOffer) endCall(true); // leaving a chat ends any call
   state.activeConv = conv;
   state.renderedIds = new Set();
+  state.msgById = {};
   state.typers = {};
   state.typerTimers = {};
+  cancelReply();
   renderTyping();
   $("#call-btn").classList.toggle("hidden", conv.type !== "dm");
   $("#chat-empty").classList.add("hidden");
@@ -468,6 +487,10 @@ function connectWs(convId) {
         updateDisappearIndicator();
         return;
       }
+      if (data.type === "reaction" && data.messageId) {
+        if (state.msgById[data.messageId]) { state.msgById[data.messageId].reactions = data.reactions || {}; renderReactions(data.messageId); }
+        return;
+      }
       if (data.type === "message" && state.activeConv && data.message.conversationId === state.activeConv.id) {
         renderMessage(data.message);
         scrollBottom();
@@ -525,18 +548,23 @@ function renderMessage(m) {
   if (state.renderedIds.has(m.id)) return;
   state.renderedIds.add(m.id);
   if (m.expiresAt && m.expiresAt <= Date.now()) return; // already disappeared
+  state.msgById[m.id] = m;
   const mine = m.senderId === state.me.id;
   const div = document.createElement("div");
   div.className = "msg " + (mine ? "me" : "them") + (m.imageUrl ? " has-image" : "") + (m.expiresAt ? " ephemeral" : "");
+  div.dataset.id = m.id;
   const showName = !mine && state.activeConv && state.activeConv.type === "group";
   const nameLabel = showName ? `<span class="msg-sender">${escapeHtml(m.senderName)}</span>` : "";
+  const reply = m.replyTo && m.replySnippet ? `<div class="reply-quote"><b>${escapeHtml(m.replySender || "")}</b>${escapeHtml(m.replySnippet)}</div>` : "";
   const image = m.imageUrl
     ? `<a href="${escapeAttr(m.imageUrl)}" target="_blank" rel="noopener" class="msg-image-link"><img class="msg-image" src="${escapeAttr(m.imageUrl)}" alt="photo" loading="lazy"></a>`
     : "";
+  const audio = m.audioUrl ? `<audio controls preload="none" src="${escapeAttr(m.audioUrl)}"></audio>` : "";
   const body = m.body ? `<span class="body">${escapeHtml(m.body)}</span>` : "";
-  div.innerHTML = `${nameLabel}${image}${body}<span class="time">${fmtTime(m.createdAt)}</span>`;
+  div.innerHTML = `${nameLabel}${reply}${image}${audio}${body}<span class="time">${fmtTime(m.createdAt)}</span><div class="reactions"></div>`;
+  div.addEventListener("click", (e) => { if (e.target.closest("a, audio, .reaction-chip")) return; openMsgMenu(m.id); });
   $("#messages").appendChild(div);
-  // Someone who just sent a message isn't typing anymore.
+  renderReactions(m.id);
   if (state.typers[m.senderId]) { delete state.typers[m.senderId]; renderTyping(); }
   if (mine) { state.lastOutgoingAt = Math.max(state.lastOutgoingAt, m.createdAt); updateSeen(); }
   if (m.expiresAt) {
@@ -544,6 +572,59 @@ function renderMessage(m) {
     setTimeout(() => div.remove(), Math.max(0, Math.min(ms, 2147483000)));
   }
 }
+
+function renderReactions(id) {
+  const m = state.msgById[id];
+  const container = document.querySelector(`.msg[data-id="${CSS.escape(id)}"] .reactions`);
+  if (!m || !container) return;
+  const rx = m.reactions || {};
+  const emojis = Object.keys(rx).filter((e) => rx[e] && rx[e].length);
+  container.innerHTML = emojis
+    .map((e) => {
+      const mine = rx[e].includes(state.me.id);
+      return `<span class="reaction-chip ${mine ? "mine" : ""}" data-emoji="${escapeAttr(e)}">${e}<span class="reaction-count">${rx[e].length}</span></span>`;
+    })
+    .join("");
+  container.querySelectorAll(".reaction-chip").forEach((chip) =>
+    chip.addEventListener("click", (ev) => { ev.stopPropagation(); toggleReaction(id, chip.dataset.emoji); })
+  );
+}
+async function toggleReaction(id, emoji) {
+  try {
+    const { reactions } = await api("/api/reactions/toggle", { method: "POST", body: JSON.stringify({ messageId: id, emoji }) });
+    if (state.msgById[id]) state.msgById[id].reactions = reactions;
+    renderReactions(id);
+    sendSignal({ type: "reaction", messageId: id, reactions });
+  } catch {}
+}
+
+// ---------- Message action menu (react / reply) ----------
+let menuMsgId = null;
+function openMsgMenu(id) { menuMsgId = id; $("#msg-menu").classList.remove("hidden"); }
+$("#msg-menu").addEventListener("click", (e) => { if (e.target.id === "msg-menu") $("#msg-menu").classList.add("hidden"); });
+document.querySelectorAll(".emoji-btn").forEach((b) =>
+  b.addEventListener("click", () => { if (menuMsgId) toggleReaction(menuMsgId, b.dataset.emoji); $("#msg-menu").classList.add("hidden"); })
+);
+$("#msg-reply-btn").addEventListener("click", () => { if (menuMsgId) startReply(menuMsgId); $("#msg-menu").classList.add("hidden"); });
+
+// ---------- Reply ----------
+function startReply(id) {
+  const m = state.msgById[id];
+  if (!m) return;
+  const snippet = m.body ? m.body.slice(0, 90) : m.imageUrl ? "📷 Photo" : m.audioUrl ? "🎤 Voice message" : "";
+  const sender = m.senderId === state.me.id ? "yourself" : m.senderName;
+  state.replyingTo = { id, sender, snippet };
+  $("#reply-banner-sender").textContent = sender;
+  $("#reply-banner-snippet").textContent = snippet;
+  $("#reply-banner").classList.remove("hidden");
+  $("#composer-input").focus();
+}
+function cancelReply() { state.replyingTo = null; $("#reply-banner").classList.add("hidden"); }
+function attachReply(payload) {
+  if (state.replyingTo) { payload.replyTo = state.replyingTo.id; payload.replySender = state.replyingTo.sender; payload.replySnippet = state.replyingTo.snippet; }
+  return payload;
+}
+$("#reply-cancel").addEventListener("click", cancelReply);
 
 function sendRead() {
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
@@ -562,8 +643,9 @@ $("#composer").addEventListener("submit", (e) => {
   const input = $("#composer-input");
   const body = input.value.trim();
   if (!body || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
-  state.ws.send(JSON.stringify({ type: "message", body }));
+  state.ws.send(JSON.stringify(attachReply({ type: "message", body })));
   input.value = "";
+  cancelReply();
   input.focus();
 });
 
@@ -647,7 +729,8 @@ $("#attach-file").addEventListener("change", async (e) => {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Upload failed.");
-    state.ws.send(JSON.stringify({ type: "message", body: caption, imageUrl: data.imageUrl }));
+    state.ws.send(JSON.stringify(attachReply({ type: "message", body: caption, imageUrl: data.imageUrl })));
+    cancelReply();
     input.value = "";
     input.placeholder = oldPh;
   } catch (err) {
@@ -1105,6 +1188,40 @@ $("#call-camera").addEventListener("click", () => {
   call.camOff = !call.camOff;
   call.localStream.getVideoTracks().forEach((t) => (t.enabled = !call.camOff));
   $("#call-camera").classList.toggle("off", call.camOff);
+});
+
+// ---------- Voice messages ----------
+let mediaRecorder = null, audioChunks = [], recTimer = null;
+$("#mic-btn").addEventListener("click", async () => {
+  if (mediaRecorder && mediaRecorder.state === "recording") { mediaRecorder.stop(); return; }
+  if (!state.activeConv || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { alert("Microphone access is needed for voice messages."); return; }
+  audioChunks = [];
+  const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4" : "";
+  try { mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined); }
+  catch { alert("Voice recording isn't supported on this device."); stream.getTracks().forEach((t) => t.stop()); return; }
+  mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) audioChunks.push(e.data); };
+  mediaRecorder.onstop = async () => {
+    clearTimeout(recTimer);
+    stream.getTracks().forEach((t) => t.stop());
+    $("#mic-btn").classList.remove("recording");
+    const type = (mediaRecorder && mediaRecorder.mimeType) || "audio/webm";
+    const blob = new Blob(audioChunks, { type });
+    mediaRecorder = null;
+    if (!blob.size || !state.activeConv || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+    try {
+      const res = await fetch("/api/messages/audio?conversation=" + encodeURIComponent(state.activeConv.id), { method: "POST", headers: { "Content-Type": blob.type }, body: blob });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Upload failed.");
+      state.ws.send(JSON.stringify(attachReply({ type: "message", body: "", audioUrl: data.audioUrl })));
+      cancelReply();
+    } catch (e) { alert(e.message); }
+  };
+  mediaRecorder.start();
+  $("#mic-btn").classList.add("recording");
+  recTimer = setTimeout(() => { if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop(); }, 60000);
 });
 
 // ---------- Boot ----------

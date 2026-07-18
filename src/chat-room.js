@@ -71,12 +71,23 @@ export class ChatRoom {
       return;
     }
 
+    // Reaction changed — relay the new aggregated reactions for that message.
+    if (data.type === "reaction") {
+      this.broadcastExcept(ws, JSON.stringify({ type: "reaction", messageId: data.messageId, reactions: data.reactions }));
+      return;
+    }
+
     if (data.type === "message") {
       const body = typeof data.body === "string" ? data.body.trim().slice(0, 4000) : "";
       let imageUrl = typeof data.imageUrl === "string" ? data.imageUrl : "";
-      if (imageUrl && !imageUrl.startsWith("/api/message-image/")) imageUrl = ""; // only allow our own images
-      if (!body && !imageUrl) return;
-      await this.persistAndBroadcast(meta, body, imageUrl);
+      if (imageUrl && !imageUrl.startsWith("/api/message-image/")) imageUrl = "";
+      let audioUrl = typeof data.audioUrl === "string" ? data.audioUrl : "";
+      if (audioUrl && !audioUrl.startsWith("/api/message-audio/")) audioUrl = "";
+      if (!body && !imageUrl && !audioUrl) return;
+      const reply = data.replyTo
+        ? { replyTo: String(data.replyTo).slice(0, 64), replySender: String(data.replySender || "").slice(0, 60), replySnippet: String(data.replySnippet || "").slice(0, 140) }
+        : {};
+      await this.persistAndBroadcast(meta, { body, imageUrl, audioUrl, ...reply });
     }
   }
 
@@ -92,7 +103,8 @@ export class ChatRoom {
   }
   async webSocketError() {}
 
-  async persistAndBroadcast(meta, body, imageUrl) {
+  async persistAndBroadcast(meta, opts) {
+    const { body = "", imageUrl = "", audioUrl = "", replyTo = null, replySender = null, replySnippet = null } = opts;
     const conv = await this.env.DB
       .prepare("SELECT disappear_seconds FROM conversations WHERE id = ?")
       .bind(meta.conversationId)
@@ -107,13 +119,18 @@ export class ChatRoom {
       senderName: meta.displayName,
       body,
       imageUrl: imageUrl || "",
+      audioUrl: audioUrl || "",
+      replyTo,
+      replySender,
+      replySnippet,
+      reactions: {},
       expiresAt,
       createdAt,
     };
     await this.env.DB.prepare(
-      "INSERT INTO messages (id, conversation_id, sender_id, body, image_url, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      "INSERT INTO messages (id, conversation_id, sender_id, body, image_url, audio_url, reply_to, reply_sender, reply_snippet, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
-      .bind(message.id, message.conversationId, message.senderId, message.body, message.imageUrl || null, expiresAt, createdAt)
+      .bind(message.id, message.conversationId, message.senderId, message.body, message.imageUrl || null, message.audioUrl || null, replyTo, replySender, replySnippet, expiresAt, createdAt)
       .run();
 
     const payload = JSON.stringify({ type: "message", message });
