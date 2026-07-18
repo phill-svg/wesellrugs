@@ -751,6 +751,7 @@ function openSettings() {
   renderSwatches();
   updateSettingsAvatar();
   $("#notif-msg").textContent = "";
+  $("#admin-link").classList.toggle("hidden", !state.me.isAdmin);
   refreshNotifState();
   $("#settings-modal").classList.remove("hidden");
 }

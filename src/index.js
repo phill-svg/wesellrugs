@@ -27,6 +27,11 @@ const pickColor = () => AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.l
 const ONLINE_WINDOW_MS = 60_000;
 const isOnline = (lastSeen) => !!lastSeen && Date.now() - lastSeen < ONLINE_WINDOW_MS;
 
+// The owner account (Phill / skiptoolow) — the only one who can see the admin dashboard.
+// Overridable via the ADMIN_USER_ID binding (used for local testing).
+const ADMIN_USER_ID_DEFAULT = "d5bea6365224d406d1673296";
+const adminIdFor = (env) => (env.ADMIN_USER_ID && String(env.ADMIN_USER_ID).trim()) || ADMIN_USER_ID_DEFAULT;
+
 // Deterministic conversation id for a 1:1 DM between two user ids.
 function dmConversationId(a, b) {
   return "dm_" + [a, b].sort().join("_");
@@ -95,6 +100,7 @@ async function handleApi(request, env, url) {
   const db = env.DB;
   const { pathname } = url;
   const method = request.method;
+  const adminId = adminIdFor(env);
 
   // ---- Register ----
   if (pathname === "/api/register" && method === "POST") {
@@ -141,6 +147,7 @@ async function handleApi(request, env, url) {
           bio: row.bio || "",
           avatarColor: row.avatar_color || "",
           avatarUrl: row.avatar_url || "",
+          isAdmin: row.id === adminId,
         },
       },
       { headers: { "Set-Cookie": sessionCookie(token) } }
@@ -157,7 +164,58 @@ async function handleApi(request, env, url) {
   const me = await getUser(request, db);
   if (!me) return json({ error: "Not authenticated." }, { status: 401 });
 
-  if (pathname === "/api/me" && method === "GET") return json({ user: me });
+  if (pathname === "/api/me" && method === "GET") return json({ user: { ...me, isAdmin: me.id === adminId } });
+
+  // ---- Admin dashboard data (owner only) ----
+  if (pathname === "/api/admin/data" && method === "GET") {
+    if (me.id !== adminId) return json({ error: "Not authorised." }, { status: 403 });
+    const counts = await db
+      .prepare(
+        `SELECT (SELECT COUNT(*) FROM users) AS users,
+                (SELECT COUNT(*) FROM messages) AS messages,
+                (SELECT COUNT(*) FROM conversations) AS chats,
+                (SELECT COUNT(*) FROM push_subscriptions) AS push_subs`
+      )
+      .first();
+    const { results: users } = await db
+      .prepare(
+        `SELECT id, username, display_name, bio, avatar_url, last_seen, created_at FROM users ORDER BY created_at DESC`
+      )
+      .all();
+    const { results: messages } = await db
+      .prepare(
+        `SELECT m.id, m.body, m.image_url, m.created_at,
+                u.display_name AS sender, u.username AS sender_username,
+                c.type AS conv_type, c.name AS conv_name
+         FROM messages m
+         JOIN users u ON u.id = m.sender_id
+         JOIN conversations c ON c.id = m.conversation_id
+         ORDER BY m.created_at DESC LIMIT 300`
+      )
+      .all();
+    return json({
+      counts,
+      users: users.map((u) => ({
+        id: u.id,
+        username: u.username,
+        displayName: u.display_name,
+        bio: u.bio || "",
+        avatarUrl: u.avatar_url || "",
+        online: isOnline(u.last_seen),
+        lastSeen: u.last_seen || 0,
+        createdAt: u.created_at,
+      })),
+      messages: messages.map((m) => ({
+        id: m.id,
+        body: m.body || "",
+        imageUrl: m.image_url || "",
+        sender: m.sender,
+        senderUsername: m.sender_username,
+        conversation: m.conv_type === "group" ? (m.conv_name || "Group") : "Direct message",
+        createdAt: m.created_at,
+      })),
+    });
+  }
 
   // ---- Presence heartbeat ----
   if (pathname === "/api/presence" && method === "POST") {
