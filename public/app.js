@@ -140,6 +140,7 @@ function enterApp(user) {
   $("#auth-screen").classList.add("hidden");
   $("#app").classList.remove("hidden");
   renderMe();
+  updateWelcome();
   refreshAll();
   registerServiceWorker();
   pingPresence();
@@ -245,6 +246,31 @@ function renderMe() {
   paintAvatar($("#me-avatar"), state.me);
 }
 
+const WELCOME_TIPS = [
+  "Tip: tap ⏱️ in a chat to make messages disappear.",
+  "Tip: tap a chat's header to view a profile or edit a group.",
+  "Tip: tap 📹 in a chat to start a video call.",
+  "Tip: add a profile photo from your settings — tap your name, top-left.",
+  "Tip: turn on 🔔 notifications so you never miss a message.",
+];
+function updateWelcome() {
+  if (!state.me) return;
+  const first = (state.me.displayName || "there").split(/\s+/)[0];
+  $("#welcome-title").textContent = "Hey " + first + " 👋";
+  const fcount = state.friends.length;
+  const online = state.friends.filter((f) => f.online).length;
+  let sub;
+  if (!fcount) sub = "You haven't added anyone yet — search for people to get started.";
+  else if (online) sub = `${online} of your ${fcount} friend${fcount === 1 ? "" : "s"} ${online === 1 ? "is" : "are"} online right now.`;
+  else sub = `You have ${fcount} friend${fcount === 1 ? "" : "s"}. Pick a chat or start a new one.`;
+  $("#welcome-sub").textContent = sub;
+  $("#welcome-tip").textContent = WELCOME_TIPS[Math.floor(Math.random() * WELCOME_TIPS.length)];
+}
+$("#wc-search").addEventListener("click", () => $("#search-input").focus());
+$("#wc-group").addEventListener("click", () => $("#new-group-btn").click());
+$("#wc-notif").addEventListener("click", openSettings);
+$("#wc-profile").addEventListener("click", openSettings);
+
 async function refreshAll() {
   await Promise.all([loadRequests(), loadFriends(), loadConversations()]);
 }
@@ -320,6 +346,7 @@ async function loadFriends() {
   try { ({ friends } = await api("/api/friends")); } catch { return; }
   friends.sort((a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0) || a.displayName.localeCompare(b.displayName));
   state.friends = friends;
+  updateWelcome();
   const onlineCount = friends.filter((f) => f.online).length;
   const title = $("#friends-title");
   if (title) title.textContent = onlineCount ? `Friends · ${onlineCount} online` : "Friends";
@@ -914,11 +941,17 @@ $("#group-create").addEventListener("click", async () => {
 // ---------- Disappearing messages ----------
 const DISAPPEAR_LABELS = { 0: "off", 5: "5s", 10: "10s", 30: "30s", 60: "1m", 3600: "1h", 86400: "1d" };
 function disappearLabel(s) { return DISAPPEAR_LABELS[s] || "off"; }
+const DISAPPEAR_PHRASE = { 5: "after 5 seconds", 10: "after 10 seconds", 30: "after 30 seconds", 60: "after 1 minute", 3600: "after 1 hour", 86400: "after 1 day" };
 function updateDisappearIndicator() {
   const secs = (state.activeConv && state.activeConv.disappearSeconds) || 0;
   const btn = $("#timer-btn");
   btn.classList.toggle("active", secs > 0);
   btn.title = secs > 0 ? "Disappearing: " + disappearLabel(secs) : "Disappearing messages: off";
+  const banner = $("#disappear-banner");
+  if (banner) {
+    if (secs > 0) { banner.textContent = "⏱️ Messages disappear " + (DISAPPEAR_PHRASE[secs] || ""); banner.classList.remove("hidden"); }
+    else banner.classList.add("hidden");
+  }
 }
 async function setDisappear(seconds) {
   $("#timer-menu").classList.add("hidden");

@@ -99,7 +99,20 @@ body {
 
 /* ---- CHAT ---- */
 .chat { display: flex; flex-direction: column; background: var(--bg); overflow: hidden; }
-.chat-empty { flex: 1; display: grid; place-items: center; color: var(--text-soft); text-align: center; }
+.chat-empty { flex: 1; display: grid; place-items: center; color: var(--text-soft); text-align: center; padding: 24px; overflow-y: auto; background: radial-gradient(900px 500px at 50% -5%, #1a2030 0%, var(--bg) 55%); }
+.welcome { max-width: 560px; width: 100%; }
+.welcome-logo { font-size: 3rem; color: var(--accent); margin-bottom: .4rem; }
+.welcome h2 { font-family: "Fraunces", serif; font-size: 2rem; color: var(--text); margin: 0 0 .3rem; }
+.welcome-sub { color: var(--text-soft); font-size: 1.05rem; margin: 0 0 1.8rem; }
+.welcome-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; text-align: left; }
+.welcome-card { display: flex; flex-direction: column; gap: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; cursor: pointer; color: var(--text); transition: transform .1s ease, border-color .15s ease; }
+.welcome-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+.welcome-card .wc-ico { font-size: 1.7rem; margin-bottom: 6px; }
+.welcome-card b { font-size: 1.02rem; }
+.welcome-card small { color: var(--text-soft); font-size: .84rem; }
+.welcome-tip { margin-top: 1.6rem; color: var(--text-soft); font-size: .9rem; min-height: 1.2em; }
+
+.disappear-banner { display: flex; align-items: center; justify-content: center; gap: 6px; background: #2a2412; color: #f3d8a6; font-size: .82rem; padding: 6px 12px; border-bottom: 1px solid #4a3d1a; }
 .chat-active { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .chat-header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .peer-name { font-weight: 700; }

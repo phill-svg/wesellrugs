@@ -84,9 +84,17 @@
 
     <main class="chat">
       <div id="chat-empty" class="chat-empty">
-        <div class="chat-empty-inner">
-          <span class="logo big">◈</span>
-          <p>Search for people, add friends, and start chatting.</p>
+        <div class="welcome">
+          <div class="welcome-logo">◈</div>
+          <h2 id="welcome-title">Welcome</h2>
+          <p id="welcome-sub" class="welcome-sub">Pick a chat on the left, or start something new.</p>
+          <div class="welcome-actions">
+            <button class="welcome-card" id="wc-search" type="button"><span class="wc-ico">🔍</span><b>Find people</b><small>Search & add friends</small></button>
+            <button class="welcome-card" id="wc-group" type="button"><span class="wc-ico">👥</span><b>New group</b><small>Start a group chat</small></button>
+            <button class="welcome-card" id="wc-notif" type="button"><span class="wc-ico">🔔</span><b>Notifications</b><small>Get pinged for messages</small></button>
+            <button class="welcome-card" id="wc-profile" type="button"><span class="wc-ico">🎨</span><b>Your profile</b><small>Photo, bio & colour</small></button>
+          </div>
+          <p class="welcome-tip" id="welcome-tip"></p>
         </div>
       </div>
 
@@ -103,6 +111,7 @@
             <button type="button" id="call-btn" class="call-btn hidden" title="Video call" aria-label="Video call">📹</button>
           </div>
         </header>
+        <div id="disappear-banner" class="disappear-banner hidden"></div>
         <div id="messages" class="messages"></div>
         <div id="read-receipt" class="read-receipt"></div>
         <div id="typing-indicator" class="typing-indicator"></div>
